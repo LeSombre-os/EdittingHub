@@ -1,7 +1,7 @@
 # EdittingHub
 
 Studio de montage **100 % local** (aucun cloud, aucune télémétrie, aucune IA
-distante) qui réunit quatre outils autour d'une même interface web :
+distante) qui réunit **cinq** outils autour d'une même interface web :
 
 | Module | Ce qu'il fait | Techno |
 |---|---|---|
@@ -9,6 +9,7 @@ distante) qui réunit quatre outils autour d'une même interface web :
 | **Sous-titrage** | Transcrit l'audio en `.srt` (faster-whisper, modèles locaux) | `ResolveSubs/transcrire.py` |
 | **Plans** | Découpe une vidéo en plans et exporte EDL / FCPXML / CSV | PySceneDetect + OpenCV |
 | **Audio** | Détecte les *beats*, les classe en 3 rangs d'énergie et les pose en **marqueurs dans DaVinci Resolve** | Librosa |
+| **Rythme** | Monte la vidéo **au rythme de la musique** : découpe séquentielle sur les beats, plans min/max, bouclage, exports FCPXML/EDL/CSV | Librosa + logique locale |
 
 Interface : un seul fichier HTML (CSS + Vanilla JS, zéro CDN, zéro framework).
 Backend : FastAPI + uvicorn, jobs asynchrones annulables.
@@ -18,7 +19,7 @@ Backend : FastAPI + uvicorn, jobs asynchrones annulables.
 ## Sommaire
 
 1. [Démarrage rapide](#démarrage-rapide)
-2. [Les quatre modules](#les-quatre-modules)
+2. [Les cinq modules](#les-cinq-modules)
 3. [Marqueurs de beats dans DaVinci Resolve](#marqueurs-de-beats-dans-davinci-resolve)
 4. [API HTTP](#api-http)
 5. [Architecture du code](#architecture-du-code)
@@ -60,6 +61,16 @@ déduit du dossier parent par défaut ; s'ils sont ailleurs :
 export EDITTINGHUB_WORKSPACE=/chemin/du/workspace
 ```
 
+### Tests
+
+```bash
+~/.venvs/edittinghub/bin/python tests/smoke.py        # 36 tests, < 1 s
+~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + tests HTTP (serveur lancé)
+```
+
+Couvre le script DaVinci (compilation, frames entiers, collage console), le
+FCPXML, les quatre exports et l'installation dans Resolve.
+
 ### Lancement
 
 ```bash
@@ -71,11 +82,11 @@ python3 main.py   # équivalent en Python pur
 L'interface est servie sur **<http://127.0.0.1:8005>**.
 Le serveur écoute uniquement sur `127.0.0.1` : rien n'est exposé au réseau.
 
-Pour arrêter : `pkill -f "uvicorn app.server:app"`.
+Pour arrêter : `./stop.sh` (ne tue que le serveur, pas le shell appelant).
 
 ---
 
-## Les quatre modules
+## Les cinq modules
 
 ### 1. Conversion
 
@@ -116,6 +127,21 @@ l'énergie (percentiles 66 / 33) :
 | 3 | Micro-variations (décoché par défaut) | Bleu |
 
 Chaque rang est filtrable à l'export via les cases à cocher.
+
+### 5. Montage au rythme (auto-cut beats)
+
+Découpe la vidéo **séquentiellement** pour coller aux temps forts de la musique :
+
+- **Source** : une vidéo (rush) + une musique (beats via Librosa).
+- **Beats retenus** : rangs 1 et/ou 2 (rang 3 trop dense, optionnel).
+- **Durée de plan** : min / max (ex: 0.8 s – 3 s) — beats trop proches fusionnés, silences trop longs subdivisés.
+- **Bouclage** : si la musique est plus longue que la vidéo, le rush est relu depuis le début (option décochable).
+- **Départ vidéo** : offset en secondes dans le rush (par défaut 0).
+- **Exports** :
+  - **FCPXML 1.9** : plans vidéo + musique sur **piste liée** (`lane="-1"`), importable par Resolve.
+  - **EDL CMX 3600** : 4 timecodes par événement (source + record).
+  - **CSV** : tableau lisible (plan, beat, source in/out, durée, timeline).
+- **Import Resolve** : *Fichier → Importer → Timeline…* → choisir le `.fcpxml`. La musique arrive déjà alignée sur la piste liée.
 
 ---
 
@@ -218,6 +244,9 @@ Toutes les routes sont locales (`127.0.0.1:8005`).
 | `POST` | `/api/audio/analyze` | Lance une analyse de beats |
 | `POST` | `/api/audio/export` | Export CSV / EDL / FCPXML / script `.py` |
 | `POST` | `/api/audio/davinci/install` | Installe le script dans le menu Scripts |
+| `POST` | `/api/rhythm/scan` | Vérifie vidéo + musique, renvoie durées + estimation |
+| `POST` | `/api/rhythm/start` | Lance analyse beats + calcul du montage (job) |
+| `POST` | `/api/rhythm/export` | Export FCPXML / EDL / CSV du montage |
 | `GET` | `/api/job/{id}` | État, progression, résultat d'un job |
 | `POST` | `/api/job/{id}/cancel` | Annule le job et tue ses sous-processus |
 
@@ -240,6 +269,19 @@ curl -X POST http://127.0.0.1:8005/api/audio/export \
 curl -X POST http://127.0.0.1:8005/api/audio/davinci/install \
      -H 'Content-Type: application/json' \
      -d '{"job_id":1,"fps":24,"ranks":[1,2]}'
+
+# Montage au rythme
+curl -X POST http://127.0.0.1:8005/api/rhythm/scan \
+     -H 'Content-Type: application/json' \
+     -d '{"video_path":"/chemin/rush.mp4","audio_path":"/chemin/musique.mp3"}'
+
+curl -X POST http://127.0.0.1:8005/api/rhythm/start \
+     -H 'Content-Type: application/json' \
+     -d '{"video_path":"/chemin/rush.mp4","audio_path":"/chemin/musique.mp3","ranks":[1],"min_shot":0.8,"max_shot":3.0,"loop":true,"fps":24}'
+
+curl -X POST http://127.0.0.1:8005/api/rhythm/export \
+     -H 'Content-Type: application/json' \
+     -d '{"job_id":1,"fmt":"fcpxml","include_audio":true}'
 ```
 
 `fmt` accepte : `csv`, `edl`, `xml`, `fcpxml` (alias de `xml`), `davinci_script`.
@@ -258,7 +300,7 @@ EdittingHub/
 │   ├── config.py              # Chemins, constantes, détection des outils
 │   ├── server.py              # FastAPI : routes, jobs, exports
 │   ├── davinci.py             # Génération + installation du script Resolve
-│   ├── fcpxml.py              # FCPXML 1.9 (marqueurs, découpe de plans)
+│   ├── fcpxml.py              # FCPXML 1.9 (marqueurs, découpe de plans, montage rythme)
 │   ├── media.py               # ffprobe : durée, codecs, dimensions
 │   ├── procs.py               # Gestion des sous-processus (killpg)
 │   ├── estimates.py           # Estimations de durée calibrées
@@ -268,7 +310,8 @@ EdittingHub/
 │   │   ├── convert.py         # → ResolveConvert/convert.py
 │   │   ├── subtitles.py       # → ResolveSubs/transcrire.py
 │   │   ├── scene_detect.py    # → PySceneDetect
-│   │   └── audio_beats.py     # → Librosa
+│   │   ├── audio_beats.py     # → Librosa (analyse beats)
+│   │   └── rhythm.py          # → Montage au rythme (coupes, plan, exports)
 │   └── static/
 │       ├── index.html         # Toute l'UI (CSS + JS inline)
 │       └── icon.svg
@@ -320,8 +363,12 @@ tail -f ~/.local/share/DaVinciResolve/logs/ResolveDebug.txt
 - **Rang 3** : très dense (une micro-variation tous les 2-3 dixièmes). Décoché
   par défaut pour garder une timeline lisible.
 - Le module **Conversion** et le module **Sous-titrage** dépendent de scripts
-  externes au dépôt (`ResolveConvert/`, `ResolveSubs/`). Sans eux, seuls les
-  modules **Plans** et **Audio** sont opérationnels.
+  externes au dépôt (`ResolveConvert/`, `ResolveSubs/`). Sans eux, les modules
+  **Plans**, **Audio** et **Rythme** restent opérationnels.
+- **Montage au rythme** : ne génère pas de fichiers médias, seulement des
+  timelines (FCPXML/EDL/CSV). La musique n'est pas ré-encodée, elle est
+  référencée par son chemin local — les chemins doivent rester valides pour
+  l'import Resolve.
 - Pas de tests automatisés dans le dépôt : la validation se fait par les
   scénarios E2E décrits dans `AGENTS.md`.
 

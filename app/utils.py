@@ -3,6 +3,7 @@
 Gestion des timecodes, formatage, parsing de la sortie des scripts,
 et helpers de conversion pour l'export EDL/CSV/XML.
 """
+import math
 import os
 import re
 from datetime import datetime
@@ -45,13 +46,19 @@ def seconds_to_srt(seconds):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def seconds_to_frames(seconds, fps=24):
+    # Arrondi round-half-up, identique à la conversion du script DaVinci.
+    fps = float(fps)
+    return max(0, int(math.floor(float(seconds) * fps + 0.5)))
+
+
 def seconds_to_edl_timecode(seconds, fps=24):
     """Convertit des secondes en timecode EDL : HH:MM:SS:FF.
 
     Utilise le fps fourni (24 par défaut pour le cinéma).
     """
     fps = int(round(fps))
-    total_frames = int(round(seconds * fps))
+    total_frames = seconds_to_frames(seconds, fps)
     h = total_frames // (fps * 3600)
     m = (total_frames // (fps * 60)) % 60
     s = (total_frames // fps) % 60

@@ -147,6 +147,10 @@ def build_script(beats, fps: float = 24.0, title: str | None = None,
         Le contenu texte du script ``.py``.
     """
     beats = list(beats or [])
+    # Filtrage défensif : l'appelant filtre déjà, mais on ne dépend pas de lui.
+    if ranks is not None:
+        allowed = {int(r) for r in ranks}
+        beats = [b for b in beats if int(b.get("rank") or 0) in allowed]
     title = _sanitize(title or "Audio Beat Markers")
     source = _sanitize(os.path.basename(asset_path)) if asset_path else "(inconnu)"
     ranks_txt = ",".join(str(r) for r in (ranks or sorted(

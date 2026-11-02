@@ -16,6 +16,7 @@
   --sub:#00d4aa; --sub2:#00a8a8;
   --scene:#ffb224; --scene2:#ff8c00;
   --audio:#ff6b9e; --audio2:#ff8e6c;
+  --rhy:#a3e635; --rhy2:#4ade80;
   --shadow:0 12px 34px rgba(0,0,0,.4);
 }
 *{box-sizing:border-box}
@@ -67,6 +68,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;
 .tab[data-tab="subtitles"].active{background:linear-gradient(135deg,var(--sub),var(--sub2))}
 .tab[data-tab="scenes"].active{background:linear-gradient(135deg,var(--scene),var(--scene2))}
 .tab[data-tab="audio"].active{background:linear-gradient(135deg,var(--audio),var(--audio2))}
+.tab[data-tab="rhythm"].active{background:linear-gradient(135deg,var(--rhy),var(--rhy2))}
 
 /* ── Panels ─────────────────────────────────────────────── */
 .panel{display:none;animation:fade .22s ease}
@@ -256,7 +258,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
     <div class="logo"><img src="/static/icon.svg" alt="EdittingHub"></div>
     <div>
       <h1>Editting<span>Hub</span></h1>
-      <p>Studio local · conversion · sous-titrage · plans · audio</p>
+      <p>Studio local · conversion · sous-titrage · plans · audio · rythme</p>
     </div>
   </div>
   <div class="status-pill">
@@ -275,6 +277,8 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
           aria-controls="panel-scenes" id="tabbtn-scenes">✂️ Découpage</button>
   <button class="tab" role="tab" aria-selected="false" data-tab="audio"
           aria-controls="panel-audio" id="tabbtn-audio">🎵 Beats Audio</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="rhythm"
+          aria-controls="panel-rhythm" id="tabbtn-rhythm">🥁 Montage au rythme</button>
 </div>
 
 <!-- ═══ PANNEAU 1 : CONVERSION ═══════════════════════════ -->
@@ -560,6 +564,10 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
         <label class="label" for="audioFps">FPS (export EDL)</label>
         <input id="audioFps" type="number" min="1" max="120" value="24">
       </div>
+      <div class="inp-group">
+        <label class="label" for="audioOffset" title="Décale tous les marqueurs (ms). Positif = plus tard. Sert à compenser un offset résiduel entre le son et la vidéo.">Décalage (ms)</label>
+        <input id="audioOffset" type="number" min="-5000" max="5000" step="1" value="0">
+      </div>
     </div>
   </div>
 
@@ -660,9 +668,114 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
   </div>
 </section>
 
+<!-- ═══ PANNEAU 5 : MONTAGE AU RYTHME ═══════════════════ -->
+<section class="panel" id="panel-rhythm" role="tabpanel" aria-labelledby="tabbtn-rhythm">
+  <div class="card" data-mod="rhythm">
+    <h2>Sources</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="rhythmVideo">Vidéo à découper</label>
+        <input id="rhythmVideo" type="text" placeholder="/media/…/film.mp4"
+               autocomplete="off" spellcheck="false" oninput="updateModuleAvailability()">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="browseRhythm('video')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="inp-group">
+        <label class="label" for="rhythmAudio">Musique (source des beats)</label>
+        <input id="rhythmAudio" type="text" placeholder="/media/…/musique.mp3"
+               autocomplete="off" spellcheck="false" oninput="updateModuleAvailability()">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="browseRhythm('audio')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+    </div>
+    <div class="file-browser" id="browser-rhythm" style="display:none"></div>
+    <div id="rhythmSources" class="note info" style="margin-top:12px">
+      <span class="nt">Choisissez une vidéo et une musique, puis cliquez sur <b>Vérifier</b>.</span>
+    </div>
+  </div>
+
+  <div class="card" data-mod="rhythm">
+    <h2>Réglages du montage</h2>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="rhythmMinShot">Durée min d'un plan (s)</label>
+        <input id="rhythmMinShot" type="number" min="0.1" max="30" step="0.1" value="0.8">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="rhythmMaxShot">Durée max d'un plan (s)</label>
+        <input id="rhythmMaxShot" type="number" min="0.2" max="60" step="0.1" value="3.0">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="rhythmFps">FPS de la timeline</label>
+        <input id="rhythmFps" type="number" min="1" max="120" value="24">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="rhythmVideoStart">Départ vidéo (s)</label>
+        <input id="rhythmVideoStart" type="number" min="0" step="0.1" value="0">
+      </div>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="rhythmRank1" checked>
+      <label for="rhythmRank1">Rang 1 — impacts forts (recommandé)</label>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="rhythmRank2">
+      <label for="rhythmRank2">Rang 2 — temps intermédiaires (coupe plus dense)</label>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="rhythmLoop" checked>
+      <label for="rhythmLoop">Boucler la vidéo si la musique est plus longue</label>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="rhythmAudioTrack" checked>
+      <label for="rhythmAudioTrack">Inclure la musique dans la timeline FCPXML</label>
+    </div>
+    <div class="note info" style="margin-top:12px">
+      <span class="nt">Chaque plan prend le morceau suivant de la vidéo, dans l'ordre.
+      Les beats trop proches sont fusionnés (durée min), les silences trop longs sont
+      subdivisés (durée max). Si la musique dure plus longtemps que la vidéo, le rush
+      est relu depuis le début (option « Boucler »).</span>
+    </div>
+  </div>
+
+  <div class="card" data-mod="rhythm">
+    <h2>Génération</h2>
+    <div class="btn-flex">
+      <button class="btn btn-ghost" type="button" id="rhythmScan" onclick="scanRhythm()">🔍 Vérifier (durées)</button>
+      <button class="btn btn-primary" type="button" id="rhythmGo" onclick="startRhythm()" disabled>🥁 Générer le montage</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="rhythmCancel" onclick="cancelJob('rhythm')">Arrêter</button>
+    </div>
+    <div id="rhythmMsg" aria-live="polite"></div>
+    <div class="bar" id="rhythmBar" style="display:none"><i></i></div>
+    <div id="rhythmResult" class="hidden">
+      <div class="stats" id="rhythmStats"></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Plan</th><th>Beat (s)</th><th>Source in</th><th>Source out</th><th>Durée</th><th>Timeline</th></tr></thead>
+          <tbody id="rhythmTbody"></tbody>
+        </table>
+      </div>
+      <div class="btn-flex btn-margin">
+        <button class="btn btn-primary btn-sm" type="button" onclick="exportRhythm('fcpxml')">🎬 FCPXML pour Resolve</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportRhythm('edl')">📥 EDL</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportRhythm('csv')">📥 CSV</button>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:10px 0 0">
+        Dans Resolve : <b>Fichier → Importer → Timeline…</b>, choisissez le <code>.fcpxml</code>.
+        La musique arrive sur une piste liée (décochez la case ci-dessus si votre version
+        de Resolve refuse la piste liée : les coupes restent identiques).
+      </p>
+    </div>
+    <div class="logs" id="rhythmLogs"></div>
+  </div>
+</section>
+
 <footer>
-  <span>EdittingHub v1.3 · 100 % local · Zorin OS</span>
+  <span>EdittingHub v1.4 · 100 % local · Zorin OS</span>
   <span class="tool-status" id="toolStatus"></span>
+  <span class="system-status" id="systemStatus"></span>
 </footer>
 </main>
 
@@ -684,14 +797,14 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
 
 const $  = (id) => document.getElementById(id);
 
-const ALL_CTX   = ['conv', 'sub', 'scene', 'audio'];
-const MSG       = { conv:'convMsg', sub:'subMsg', scene:'sceneMsg', audio:'audioMsg' };
-const LOGS      = { conv:'convLogs', sub:'subLogs', scene:'sceneLogs', audio:'audioLogs' };
-const GO_BTN    = { conv:'convGo', sub:'subGo', scene:'sceneGo', audio:'audioGo' };
-const CANCEL_BTN= { conv:'convCancel', sub:'subCancel', scene:'sceneCancel', audio:'audioCancel' };
-const BAR       = { conv:'convBar', sub:'subBar', scene:'sceneBar', audio:'audioBar' };
-const RESULT    = { conv:'convResult', sub:'subResult', scene:'sceneResult', audio:'audioResult' };
-const JOB_LABEL = { conv:'Conversion', sub:'Transcription', scene:'Détection de plans', audio:'Analyse audio' };
+const ALL_CTX   = ['conv', 'sub', 'scene', 'audio', 'rhythm'];
+const MSG       = { conv:'convMsg', sub:'subMsg', scene:'sceneMsg', audio:'audioMsg', rhythm:'rhythmMsg' };
+const LOGS      = { conv:'convLogs', sub:'subLogs', scene:'sceneLogs', audio:'audioLogs', rhythm:'rhythmLogs' };
+const GO_BTN    = { conv:'convGo', sub:'subGo', scene:'sceneGo', audio:'audioGo', rhythm:'rhythmGo' };
+const CANCEL_BTN= { conv:'convCancel', sub:'subCancel', scene:'sceneCancel', audio:'audioCancel', rhythm:'rhythmCancel' };
+const BAR       = { conv:'convBar', sub:'subBar', scene:'sceneBar', audio:'audioBar', rhythm:'rhythmBar' };
+const RESULT    = { conv:'convResult', sub:'subResult', scene:'sceneResult', audio:'audioResult', rhythm:'rhythmResult' };
+const JOB_LABEL = { conv:'Conversion', sub:'Transcription', scene:'Détection de plans', audio:'Analyse audio', rhythm:'Montage au rythme' };
 
 /* Filtres du sélecteur natif : « Libellé|motif motif;Libellé2|motif » */
 const FILTERS = {
@@ -699,6 +812,7 @@ const FILTERS = {
   sub:   'Médias|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.mp3 *.wav *.m4a *.flac *.ogg *.opus',
   scene: 'Vidéos|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.webm',
   audio: 'Audio et vidéo|*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.oga *.opus *.mp4 *.mkv *.mov *.avi',
+  rhythm:'Vidéos|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.webm;Audio|*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.oga *.opus',
 };
 
 const VID_RE = /\.(mp4|m4v|mkv|avi|mov|mts|m2ts|mxf|ts|vob|webm)$/i;
@@ -713,6 +827,8 @@ const S = {
            timer:null, busy:false, scan:null, estimate:null, cancelling:false },
   audio: { paths:[], jobId:null, result:null, files:[], fileIndex:0, fps:24,
            timer:null, busy:false, scan:null, estimate:null, cancelling:false },
+  rhythm:{ jobId:null, result:null, timer:null, busy:false, scan:null,
+           estimate:null, cancelling:false, pickTarget:'video' },
   config: null,
   browserCtx: null,
   browserPath: '',
@@ -839,6 +955,17 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   checkServer();
   setInterval(checkServer, 10000);
+  // Moniteur système vif (toutes les 3 s) pour évaluer la charge et choisir
+  // quelles tâches parallèles lancer sans surcharger la machine
+  setInterval(async () => {
+    if (!S.serverOk) return;
+    try {
+      const r = await fetch('/api/system', { cache: 'no-store' });
+      if (!r.ok) return;
+      const sys = await r.json();
+      renderSystemStatus(sys);
+    } catch (e) { /* ignore */ }
+  }, 3000);
 
   // Navigation clavier sur les onglets (flèches gauche/droite)
   const tabs = Array.from(document.querySelectorAll('.tab'));
@@ -888,6 +1015,30 @@ function renderToolStatus(t){
     `<span class="${v ? 'y' : 'n'}">${v ? '✓' : '✗'} ${escapeHtml(k)}</span>`
   ).join('');
 }
+
+//  System status rendering
+function renderSystemStatus(sys){
+  const el = $('systemStatus');
+  if (!el) return;
+  const parts = [];
+  if (sys.cpu_load) {
+    parts.push(`CPU: ${sys.cpu_load['1min']} (1min)`);
+  }
+  if (sys.memory) {
+    parts.push(`RAM: ${sys.memory.percent}%`);
+  }
+  if (sys.swap) {
+    parts.push(`SWAP: ${sys.swap.percent}%`);
+  }
+  if (sys.gpu && sys.gpu.length) {
+    const gpu = sys.gpu[0]; // Assume first GPU
+    parts.push(`GPU: ${gpu.gpu_util}% (mem: ${gpu.mem_util}%)`);
+  }
+  el.innerHTML = parts.map(p => `<span class="y">${escapeHtml(p)}</span>`).join(' | ');
+  if (parts.length === 0) {
+    el.innerHTML = '<span class="n">Données système indisponibles</span>';
+  }
+}
 async function checkServer(){
   try {
     const r = await fetch('/api/ping', { cache: 'no-store' });
@@ -895,10 +1046,25 @@ async function checkServer(){
     $('statusDot').classList.remove('off');
     $('statusText').textContent = 'Serveur local actif';
     S.serverOk = true;
+
+    // Fetch config and system data
+    const configResp = await fetch('/api/config', { cache: 'no-store' });
+    if (configResp.ok) {
+      const config = await configResp.json();
+      renderToolStatus(config.tools || {});
+    }
+    const systemResp = await fetch('/api/system', { cache: 'no-store' });
+    if (systemResp.ok) {
+      const system = await systemResp.json();
+      renderSystemStatus(system);
+    }
   } catch (e) {
     $('statusDot').classList.add('off');
     $('statusText').textContent = 'Serveur hors ligne';
     S.serverOk = false;
+    // Clear statuses when server is down
+    $('toolStatus').innerHTML = '<span class="n">Serveur hors ligne</span>';
+    $('systemStatus').innerHTML = '';
   }
 }
 
@@ -963,6 +1129,9 @@ function updateModuleAvailability(){
   set('subGo',   S.sub.paths.length   > 0 && t.subtitles_script);
   set('sceneGo', S.scene.paths.length > 0 && t.scenedetect);
   set('audioGo', S.audio.paths.length > 0 && t.librosa);
+  const rhythmVideo = (($('rhythmVideo') || {}).value || '').trim();
+  const rhythmAudio = (($('rhythmAudio') || {}).value || '').trim();
+  set('rhythmGo', !!rhythmVideo && !!rhythmAudio && t.librosa);
 }
 
 /* ── Sélecteur NATIF (vrai explorateur du système) ──────────────────────── */
@@ -1087,6 +1256,10 @@ function pickFile(path){
   if (!ctx) return;
   path = String(path || '').trim();
   if (!path) return;
+  if (ctx === 'rhythm'){
+    setRhythmSource(S.rhythm.pickTarget || 'video', path);
+    return;
+  }
   const input = $(ctx + 'Path');
   if (input) input.value = path;
   pushPath(ctx, path);
@@ -1264,6 +1437,7 @@ async function startAudioAnalyze(){
     paths: S.audio.paths,
     audio_path: S.audio.paths[0],
     sample_rate: clampInt($('audioSr').value, 8000, 48000, 22050),
+     offset_ms: clampNum($('audioOffset').value, -5000, 5000, 0),
   };
   beginJob('audio', '/api/audio/analyze', cfg, S.audio.scan && S.audio.scan.estimate);
 }
@@ -1386,6 +1560,9 @@ function handleJobDone(key, job){
   } else if (key === 'audio'){
     renderAudioResults(r);
     toast(`${r.total_beats || 0} beats analysés`, 'ok');
+  } else if (key === 'rhythm'){
+    renderRhythmResults(r);
+    toast(`${r.segments || 0} plans générés`, 'ok');
   }
 }
 function failJob(key, message){
@@ -1541,6 +1718,135 @@ function selectAudioFile(index){
   $('audioTbody').innerHTML = rows;
 }
 
+/* ── Montage au rythme ──────────────────────────────────────────────────── */
+function rhythmSelectedRanks(){
+  const ranks = [];
+  if ($('rhythmRank1')?.checked) ranks.push(1);
+  if ($('rhythmRank2')?.checked) ranks.push(2);
+  return ranks;
+}
+function setRhythmSource(kind, path){
+  const input = $(kind === 'audio' ? 'rhythmAudio' : 'rhythmVideo');
+  if (input) input.value = path;
+  hideBrowser('rhythm');
+  updateModuleAvailability();
+}
+async function browseRhythm(kind){
+  S.rhythm.pickTarget = kind === 'audio' ? 'audio' : 'video';
+  try {
+    const data = await nativePick('rhythm', 'files');
+    if (!data.ok){
+      toast('Sélecteur natif indisponible — explorateur intégré', 'info');
+      openBrowser('rhythm');
+      return;
+    }
+    const paths = data.paths || [];
+    if (data.cancelled || !paths.length) return;
+    setRhythmSource(S.rhythm.pickTarget, paths[0]);
+    toast((kind === 'audio' ? 'Musique' : 'Vidéo') + ' sélectionnée', 'ok');
+  } catch (e) {
+    toast('Sélecteur natif indisponible — explorateur intégré', 'info');
+    openBrowser('rhythm');
+  }
+}
+async function scanRhythm(silent){
+  const video = (($('rhythmVideo') || {}).value || '').trim();
+  const audio = (($('rhythmAudio') || {}).value || '').trim();
+  if (!video || !audio){
+    if (!silent) toast('Choisissez une vidéo et une musique.', 'err');
+    return false;
+  }
+  try {
+    const data = await postJSON('/api/rhythm/scan', {
+      video_path: video, audio_path: audio,
+    });
+    S.rhythm.scan = data;
+    S.rhythm.estimate = data.estimate;
+    const v = data.video || {}, a = data.audio || {};
+    if (v.fps) $('rhythmFps').value = v.fps;
+    $('rhythmSources').innerHTML =
+      '<span class="nt">🎬 <b>' + escapeHtml(v.name || video) + '</b> — ' +
+      (v.width || '?') + '×' + (v.height || '?') + ', ' +
+      Number(v.duration || 0).toFixed(2) + ' s, ' + (v.fps || '?') + ' fps<br>' +
+      '🎵 <b>' + escapeHtml(a.name || audio) + '</b> — ' +
+      Number(a.duration || 0).toFixed(2) + ' s · analyse estimée ~' +
+      ((data.estimate && data.estimate.human) || '?') + '</span>';
+    setMsg('rhythm', '<div class="note okn">✅ <span class="nt">Sources valides · ' +
+      fmtDuration(v.duration) + ' de vidéo · ' + fmtDuration(a.duration) +
+      ' de musique</span></div>');
+    updateModuleAvailability();
+    return true;
+  } catch (e) {
+    if (!silent) setMsg('rhythm', errNote(e.message || e));
+    return false;
+  }
+}
+async function startRhythm(){
+  const video = (($('rhythmVideo') || {}).value || '').trim();
+  const audio = (($('rhythmAudio') || {}).value || '').trim();
+  if (!video || !audio){ toast('Choisissez une vidéo et une musique.', 'err'); return; }
+  const ranks = rhythmSelectedRanks();
+  if (!ranks.length){ toast('Cochez au moins le rang 1.', 'err'); return; }
+  const minShot = clampNum($('rhythmMinShot').value, 0.1, 30, 0.8);
+  const maxShot = clampNum($('rhythmMaxShot').value, 0.2, 60, 3.0);
+  if (maxShot < minShot){
+    toast('La durée max doit être supérieure ou égale à la durée min.', 'err');
+    return;
+  }
+  const cfg = {
+    video_path: video,
+    audio_path: audio,
+    ranks,
+    min_shot: minShot,
+    max_shot: maxShot,
+    loop: $('rhythmLoop').checked,
+    fps: clampNum($('rhythmFps').value, 1, 120, 24),
+    video_start: clampNum($('rhythmVideoStart').value, 0, 36000, 0),
+    sample_rate: 22050,
+  };
+  beginJob('rhythm', '/api/rhythm/start', cfg, S.rhythm.estimate);
+}
+function renderRhythmResults(result){
+  S.rhythm.result = result;
+  const cuts = result.cuts || [];
+  const mode = result.loop ? '↻ bouclée'
+             : (result.truncated ? '✂ tronquée' : '✓ complète');
+  $('rhythmStats').innerHTML = `
+    <div class="stat"><div class="num">${result.segments || 0}</div><div class="lbl">Plans</div></div>
+    <div class="stat"><div class="num">${result.beats_used || 0}</div><div class="lbl">Beats utilisés</div></div>
+    <div class="stat"><div class="num">${fmtDuration(result.timeline_duration)}</div><div class="lbl">Timeline</div></div>
+    <div class="stat"><div class="num" style="font-size:18px">${mode}</div><div class="lbl">Vidéo</div></div>`;
+  const max = 300;
+  let rows = cuts.slice(0, max).map((c) => `
+    <tr><td>${c.shot}</td><td>${Number(c.beat).toFixed(2)}</td>
+    <td>${Number(c.start).toFixed(2)}</td><td>${Number(c.end).toFixed(2)}</td>
+    <td>${Number(c.duration).toFixed(2)}</td><td>${Number(c.timeline).toFixed(2)}</td></tr>`).join('');
+  if (cuts.length > max){
+    rows += `<tr><td colspan="6" style="text-align:center;color:var(--mut)">… et ${cuts.length - max} plans supplémentaires (export CSV pour la liste complète)</td></tr>`;
+  }
+  $('rhythmTbody').innerHTML = rows;
+  $('rhythmResult').classList.remove('hidden');
+  const extra = result.truncated && !result.loop
+    ? ' · ⚠ vidéo épuisée avant la fin — cochez « Boucler »'
+    : '';
+  setMsg('rhythm', `<div class="note okn">✅ <span class="nt">${result.segments} plans · ${result.beats_used}/${result.beats_total} beats · ${result.tempo || '?'} BPM · timeline ${fmtDuration(result.timeline_duration)}${extra}</span></div>`);
+}
+async function exportRhythm(fmt){
+  if (!S.rhythm.jobId){ toast('Générez d\'abord un montage.', 'err'); return; }
+  const body = {
+    job_id: S.rhythm.jobId,
+    fmt,
+    include_audio: $('rhythmAudioTrack').checked,
+  };
+  try {
+    const out = await postBinary('/api/rhythm/export', body);
+    downloadBlob(out.blob, out.filename);
+    toast('Export ' + fmt.toUpperCase() + ' téléchargé', 'ok');
+  } catch (e) {
+    setMsg('rhythm', errNote(e.message || e));
+  }
+}
+
 /* ── Exports ────────────────────────────────────────────────────────────── */
 async function exportScenes(fmt){
   if (!S.scene.jobId){ toast('Lancez d\'abord une détection.', 'err'); return; }
@@ -1634,10 +1940,12 @@ async function installDavinci(){
 
 async function exportBeatsZip(){
   if (!S.audio.jobId){ toast('Lancez d\'abord une analyse audio.', 'err'); return; }
-  const fmt = ($('audioZipFmt') || {}).value || 'xml';
+  const fmt = ($('audioZipFmt') || {}).value || 'fcpxml';
+  const ranks = selectedRanks();
+  if (ranks.length === 0) { toast('Sélectionnez au moins un rang.', 'err'); return; }
   try {
     const out = await postBinary('/api/audio/export', {
-      job_id: S.audio.jobId, fmt, fps: S.audio.fps,
+      job_id: S.audio.jobId, fmt, fps: S.audio.fps, ranks,
     });
     downloadBlob(out.blob, out.filename);
     toast('Archive ZIP téléchargée', 'ok');
@@ -1657,6 +1965,7 @@ Object.assign(window, {
   scanAudio, startAudioAnalyze, selectAudioFile,
   cancelJob, exportScenes, exportScenesZip, exportBeats, exportBeatsZip,
   installDavinci, openDavinciHelp,
+  browseRhythm, scanRhythm, startRhythm, exportRhythm, setRhythmSource,
 });
 </script>
 </body>

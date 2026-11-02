@@ -216,12 +216,12 @@ def export_csv(cuts, fps=24.0):
 def export_cuts(video_path, cuts, fps, fmt="edl"):
     """Exporte les coupes dans le format demandé.
 
-    fmt : 'edl' | 'xml' | 'csv'
+    fmt : 'edl' | 'xml' | 'fcpxml' | 'csv'
     Retourne le contenu texte.
     """
     if fmt == "edl":
         return export_edl(video_path, cuts, fps)
-    elif fmt == "xml":
+    elif fmt == "xml" or fmt == "fcpxml":
         return export_xml(video_path, cuts, fps)
     elif fmt == "csv":
         return export_csv(cuts, fps)

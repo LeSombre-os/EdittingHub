@@ -36,6 +36,9 @@ DEFAULT_PROBE = {
     "has_video": False,
     "has_audio": False,
     "kind": None,
+    "start_time": 0.0,
+    "video_start": None,
+    "audio_start": None,
 }
 
 
@@ -103,25 +106,41 @@ def probe(path: str, timeout: float = 20.0) -> dict:
         info["duration"] = float(fmt.get("duration") or 0.0)
     except (TypeError, ValueError):
         info["duration"] = 0.0
+    try:
+        info["start_time"] = float(fmt.get("start_time") or 0.0)
+    except (TypeError, ValueError):
+        info["start_time"] = 0.0
 
     for stream in data.get("streams") or []:
         codec_type = stream.get("codec_type")
-        if codec_type == "video" and not info["has_video"]:
+        if codec_type == "video":
             # Ignore les vignettes de couverture (image fixe attachée)
             if stream.get("disposition", {}).get("attached_pic") == 1:
                 continue
-            info["has_video"] = True
-            info["width"] = int(stream.get("width") or 0)
-            info["height"] = int(stream.get("height") or 0)
-            info["fps"] = _parse_rate(stream.get("avg_frame_rate")) or \
-                _parse_rate(stream.get("r_frame_rate")) or 24.0
-            if not info["duration"]:
+            # Capture le début de la piste vidéo (référence temporelle).
+            if info.get("video_start") is None:
                 try:
-                    info["duration"] = float(stream.get("duration") or 0.0)
+                    info["video_start"] = float(stream.get("start_time") or 0.0)
                 except (TypeError, ValueError):
-                    pass
+                    info["video_start"] = 0.0
+            if not info["has_video"]:
+                info["has_video"] = True
+                info["width"] = int(stream.get("width") or 0)
+                info["height"] = int(stream.get("height") or 0)
+                info["fps"] = _parse_rate(stream.get("avg_frame_rate")) or \
+                    _parse_rate(stream.get("r_frame_rate")) or 24.0
+                if not info["duration"]:
+                    try:
+                        info["duration"] = float(stream.get("duration") or 0.0)
+                    except (TypeError, ValueError):
+                        pass
         elif codec_type == "audio":
             info["has_audio"] = True
+            if info.get("audio_start") is None:
+                try:
+                    info["audio_start"] = float(stream.get("start_time") or 0.0)
+                except (TypeError, ValueError):
+                    info["audio_start"] = 0.0
 
     if info["has_video"]:
         info["kind"] = "video"

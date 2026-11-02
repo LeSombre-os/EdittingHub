@@ -9,14 +9,16 @@ d'une app web locale (FastAPI backend + interface statique).
 ```
 EdittingHub/
 ├── run.sh                    # Lanceur bash : démarre le serveur + ouvre le navigateur
+├── stop.sh                   # Arrêt propre (évite le pkill qui tue le shell)
 ├── main.py                   # Point d'entrée Python (alternative à run.sh)
+├── tests/smoke.py            # 54+ tests de fumée (script DaVinci, FCPXML, exports, API, rythme)
 ├── requirements.txt          # Dépendances Python
 ├── app/
 │   ├── config.py             # Configuration : chemins, constantes, vérif outils
 │   ├── utils.py              # Utilitaires : timecode, formatage, parsing
 │   ├── server.py             # Application FastAPI + routes API
 │   ├── davinci.py            # Script marqueurs Resolve + installation menu Scripts
-│   ├── fcpxml.py             # FCPXML 1.9 (marqueurs beats, découpe de plans)
+│   ├── fcpxml.py             # FCPXML 1.9 (marqueurs beats, découpe de plans, montage rythme)
 │   ├── media.py              # ffprobe : durée, codecs, dimensions
 │   ├── procs.py              # Sous-processus + killpg (annulation réelle)
 │   ├── estimates.py          # Estimations de durée calibrées
@@ -25,7 +27,8 @@ EdittingHub/
 │   │   ├── convert.py        # Hub Conversion  → subprocess vers ResolveConvert/convert.py
 │   │   ├── subtitles.py      # Hub Sous-titrage → subprocess vers ResolveSubs/transcrire.py
 │   │   ├── scene_detect.py   # Découpage plans → PySceneDetect (scenedetect 0.7.x)
-│   │   └── audio_beats.py    # Analyse audio → Librosa 1.0
+│   │   ├── audio_beats.py    # Analyse audio → Librosa 1.0
+│   │   └── rhythm.py         # Montage au rythme → coupes séquentielles, plan, exports
 │   └── static/
 │       ├── index.html        # Interface web (CSS inline + Vanilla JS, 0 CDN)
 │       └── icon.svg          # Icône du projet (en-tête web, favicon, menu apps)
@@ -61,6 +64,14 @@ cd EdittingHub
 - Extraction d'onsets → classification 3 rangs par percentile d'énergie
 - Filtre des rangs côté serveur (`ranks: list[int]`) et côté UI (cases 1/2/3)
 - Export : CSV, EDL (markers M), FCPXML, script Python DaVinci
+
+### 5. Montage au Rythme (auto-cut beats)
+- Nouveau moteur `app/services/rhythm.py` : `selected_beats`, `cut_points`, `build_cut_plan` (min/max, subdivisions, bouclage, `video_start`, troncature), `export_rhythm_edl/csv`, `export_rhythm`, `probe_sources`.
+- `app/fcpxml.py` : helper `_append_cut_clips` + `rhythm_document` (vidéo + musique liée `lane="-1"`, option `include_audio`).
+- Serveur : `RhythmScanRequest`, `RhythmRequest`, `RhythmExportRequest`, `_rhythm_sources`, `_run_rhythm_job`, routes `POST /api/rhythm/scan`, `/api/rhythm/start`, `/api/rhythm/export`.
+- UI : 5e onglet `panel-rhythm`, CSS `--rhy`, sources vidéo/musique + explorateur intégré, réglages min/max/fps/départ, rangs 1/2, bouclage, musique, boutons Vérifier/Générer/Arrêter, stats + table + exports.
+- Export FCPXML : plans vidéo + musique sur piste liée (`lane="-1"`), importable par Resolve.
+- 100 % local, aucune inférence LLM, aucun upload.
 
 ### 5. Marqueurs DaVinci Resolve (`app/davinci.py`)
 - **L'import FCPXML/EDL ne restitue PAS les marqueurs dans Resolve Free Linux.**
@@ -105,6 +116,13 @@ curl -X POST http://127.0.0.1:8005/api/audio/davinci/install \
      -d '{"job_id":1,"fps":24,"ranks":[1,2]}'
 ```
 
+Tests de fumée (à lancer après toute modif backend) :
+
+```bash
+~/.venvs/edittinghub/bin/python tests/smoke.py        # unitaire, < 1 s (54 tests)
+~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + HTTP (serveur sur 8005, 76 tests)
+```
+
 Vérifier un script généré sans Resolve :
 
 ```bash
@@ -116,7 +134,7 @@ grep -n '^[[:space:]]\+[^#]' <fichier>.py   # doit être vide (aucune ligne inde
 
 1. **IDs uniques** : `grep -c 'id="browser"' app/static/index.html` doit renvoyer 0
    (un conteneur par onglet : `browser-conv`, `browser-sub`, `browser-scene`,
-   `browser-audio`).
+   `browser-audio`, `browser-rhythm`).
 2. **Syntaxe JS** : extraire le `<script>` et `node --check`.
 3. **Cohérence** : chaque `$('id')` doit exister ; chaque handler `onclick=` doit
    être défini **et** exporté via `Object.assign(window, …)` ; chaque clé
@@ -128,7 +146,8 @@ grep -n '^[[:space:]]\+[^#]' <fichier>.py   # doit être vide (aucune ligne inde
    puis `brave-browser --headless --dump-dom http://127.0.0.1:8005/static/__test_*.html`
    (le serveur ne monte que `/static`), et supprimer le fichier ensuite.
 5. **E2E backend** : scan conversion + scan sous-titrage, job scènes + exports
-   EDL/XML/CSV, job audio + exports CSV/EDL/XML/`davinci_script`, puis
+   EDL/XML/CSV, job audio + exports CSV/EDL/XML/`davinci_script`, job rythme
+   (scan + start + exports FCPXML/EDL/CSV), puis
    `POST /api/audio/davinci/install` → vérifier que le `.py` écrit dans
    `Fusion/Scripts/Utility/` passe `python3 -m py_compile` et ne contient
    aucune ligne indentée.
@@ -154,7 +173,7 @@ grep -n '^[[:space:]]\+[^#]' <fichier>.py   # doit être vide (aucune ligne inde
   Resolve réécrit ces fichiers à sa fermeture. Le mode scripting reste à `1`
   (console + menu Scripts fonctionnent sans mode externe).
 - `pkill -f "uvicorn app.server:app"` tue aussi le shell qui contient la commande :
-  utiliser un motif `[u]vicorn` ou un script dédié.
+  utiliser `./stop.sh` (prévu pour ça) ou un motif `[u]vicorn`.
 
 ## Nouveautés (v1.2.0)
 - **Annulation réelle** : chaque job de conversion/sous-titrage tue le groupe
@@ -190,3 +209,20 @@ grep -n '^[[:space:]]\+[^#]' <fichier>.py   # doit être vide (aucune ligne inde
 - **README complet** (installation, modules, API, architecture, dépannage, limites).
 - **Nettoyage UI** : suppression du texte d'aide dupliqué et des libellés
   parasites (`(CancellationToken)`, `showDavinciRunHelp`).
+
+## Nouveautés (v1.4.0)
+- **Module Montage au rythme (auto-cut beats)** : 5e onglet UI, découpe
+  séquentielle de la vidéo sur les beats (rangs 1/2), plans min/max, bouclage
+  optionnel, départ vidéo, exports FCPXML (piste musique liée `lane="-1"`),
+  EDL (4 timecodes), CSV.
+- **API rythme** : `/api/rhythm/scan` (vérification sources), `/api/rhythm/start`
+  (job analyse + plan), `/api/rhythm/export` (FCPXML/EDL/CSV).
+- **Moteur `rhythm.py`** : sélection beats par rangs, points de coupe, plan de
+  montage complet (bouclage, troncature, stats), exports.
+- **FCPXML étendu** : `rhythm_document()` avec musique sur piste liée,
+  `_append_cut_clips()` factorisé.
+- **Tests** : `test_rhythm()` + `test_api_rhythm()` (scan, start, exports, erreurs
+  400/404), 76 tests totaux (`--api`).
+- **UI** : onglet `rhythm`, variables CSS `--rhy/--rhy2`, explorateur natif,
+  cases rangs 1/2 (3 décoché), bouton boucle, piste musique optionnelle.
+- **Version** : 1.4.0 (serveur + footer UI).

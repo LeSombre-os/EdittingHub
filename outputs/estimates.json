@@ -1,0 +1,38 @@
+{
+  "scenes": {
+    "ds4": {
+      "ratio": 0.04976,
+      "n": 2
+    },
+    "ds2": {
+      "ratio": 0.07142,
+      "n": 20
+    },
+    "ds1": {
+      "ratio": 0.03462,
+      "n": 1
+    },
+    "ds3": {
+      "ratio": 0.06147,
+      "n": 1
+    }
+  },
+  "audio": {
+    "default": {
+      "ratio": 0.01836,
+      "n": 71
+    }
+  },
+  "convert": {
+    "tiktok:hq": {
+      "ratio": 0.15126,
+      "n": 1
+    }
+  },
+  "subtitles": {
+    "small:cpu": {
+      "ratio": 0.01861,
+      "n": 3
+    }
+  }
+}

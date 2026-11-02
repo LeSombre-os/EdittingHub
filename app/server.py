@@ -45,7 +45,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app import estimates
-from app.config import (DEFAULT_FPS, HOST, PORT, check_external_tools)
+from app.config import (DEFAULT_FPS, HOST, PORT, WORKSPACE_ROOT,
+                        check_external_tools)
 from app.errors import JobCancelled
 from app.media import AUDIO_EXTS, VIDEO_EXTS, probe
 from app.utils import collect_files, fmt_duration, fmt_size
@@ -54,6 +55,7 @@ from app.utils import list_dir as util_list_dir
 # ── Import des services (lazy : évite d'importer librosa/scenedetect au démarrage)
 from app.services.audio_beats import analyze_audio, export_markers
 from app.services.convert import ConvertService
+from app.services.rhythm import build_cut_plan, export_rhythm
 from app.services.scene_detect import detect_scenes, export_cuts
 from app.services.subtitles import SubtitleService
 
@@ -62,7 +64,7 @@ app = FastAPI(
     title="EdittingHub",
     description="Hub local 100% offline pour montage vidéo — conversion, "
                 "sous-titrage, détection de plans, analyse audio.",
-    version="1.3.0",
+    version="1.4.0",
     docs_url=None,  # désactive l'UI Swagger (UI custom)
     redoc_url=None,
 )
@@ -236,7 +238,7 @@ class SubtitleRequest(BaseModel):
     language: str = "auto"
     model: str = "small"
     offset: float = 0.0
-    device: str = "auto"
+    device: str = "cpu"
     max_chars: int = 42
     max_lines: int = 2
     mode: str = "phrases"
@@ -287,6 +289,8 @@ class AudioScanRequest(BaseModel):
 class AudioRequest(AudioScanRequest):
     paths: list[str] = Field(default_factory=list)
     audio_path: Optional[str] = None
+    # Décalage manuel appliqué aux marqueurs exportés (ms). Positif = plus tard.
+    offset_ms: Optional[float] = 0.0
 
     def all_paths(self) -> list[str]:
         if self.paths:
@@ -635,6 +639,7 @@ def _run_audio_job(job_id: int):
                 sr=cfg.get("sample_rate", 22050),
                 progress_cb=progress_cb,
                 cancel_event=cancel,
+                offset=(float(cfg.get("offset_ms") or 0.0) / 1000.0),
             )
             estimates.record("audio", "default",
                              result.get("duration") or media,
@@ -678,6 +683,114 @@ def _run_audio_job(job_id: int):
         append_log(job_id, f"[ERREUR] {e}")
 
 
+def _run_rhythm_job(job_id: int):
+    """Thread du montage au rythme : analyse des beats puis plan de coupe."""
+    job = get_job(job_id)
+    if not job:
+        return
+    cfg = job["config"]
+    cancel = job.get("_cancel")
+    video_path = cfg["video_path"]
+    audio_path = cfg["audio_path"]
+    started = time.time()
+    update_job(job_id, status="running", started=started, total=1)
+
+    try:
+        vinfo = probe(video_path)
+        ainfo = probe(audio_path)
+        video_duration = float(vinfo.get("duration") or 0.0)
+        audio_duration = float(ainfo.get("duration") or 0.0)
+        if video_duration <= 0:
+            raise RuntimeError("Durée vidéo inconnue (ffprobe).")
+        if audio_duration <= 0:
+            raise RuntimeError("Durée audio inconnue (ffprobe).")
+
+        append_log(job_id, f"Vidéo   : {os.path.basename(video_path)} "
+                           f"({fmt_duration(video_duration)})")
+        append_log(job_id, f"Musique : {os.path.basename(audio_path)} "
+                           f"({fmt_duration(audio_duration)})")
+        append_log(job_id, f"Rangs   : {', '.join(str(r) for r in cfg['ranks'])} "
+                           f"| plans {cfg['min_shot']}–{cfg['max_shot']} s")
+
+        last_log = [0.0]
+
+        def progress_cb(frac, label):
+            if cancel.is_set():
+                return
+            frac = max(0.0, min(1.0, float(frac or 0.0)))
+            update_job(job_id, progress=round(frac * 0.9, 4))
+            now = time.time()
+            if now - last_log[0] >= 1.0:
+                last_log[0] = now
+                append_log(job_id, f"    {label}")
+
+        analysis = analyze_audio(
+            audio_path,
+            sr=cfg.get("sample_rate", 22050),
+            progress_cb=progress_cb,
+            cancel_event=cancel,
+        )
+        if cancel.is_set():
+            raise JobCancelled("Montage annulé.")
+        append_log(job_id, f"    → {analysis['total_beats']} beats, "
+                           f"{analysis['tempo']} BPM")
+        update_job(job_id, progress=0.92)
+
+        plan = build_cut_plan(
+            analysis.get("beats") or [],
+            video_duration=video_duration,
+            audio_duration=audio_duration,
+            ranks=cfg["ranks"],
+            min_shot=cfg["min_shot"],
+            max_shot=cfg["max_shot"],
+            loop=cfg["loop"],
+            fps=cfg["fps"],
+            video_start=cfg.get("video_start", 0.0),
+        )
+        if not plan["cuts"]:
+            raise RuntimeError(
+                "Aucun plan généré : vérifiez les rangs cochés et la durée vidéo."
+            )
+
+        ended = time.time()
+        result = {
+            "video_path": video_path,
+            "audio_path": audio_path,
+            "video": os.path.basename(video_path),
+            "audio": os.path.basename(audio_path),
+            "fps": cfg["fps"],
+            "ranks": cfg["ranks"],
+            "beats_total": analysis["total_beats"],
+            "beats_ranked": analysis.get("ranks") or {},
+            "tempo": analysis.get("tempo"),
+            "cuts": plan["cuts"],
+            "points": plan["points"],
+            "segments": plan["segments"],
+            "clips": plan["clips"],
+            "beats_used": plan["beats_used"],
+            "timeline_duration": plan["timeline_duration"],
+            "audio_duration": plan["audio_duration"],
+            "video_duration": plan["video_duration"],
+            "video_start": plan["video_start"],
+            "loop": plan["loop"],
+            "truncated": plan["truncated"],
+            "min_shot": plan["min_shot"],
+            "max_shot": plan["max_shot"],
+            "elapsed": round(ended - started, 2),
+        }
+        update_job(job_id, status="done", result=result, progress=1.0,
+                   done=1, total=1, ended=ended)
+        append_log(job_id, f"Terminé : {plan['segments']} plans, "
+                           f"{plan['timeline_duration']}s de timeline en "
+                           f"{result['elapsed']}s")
+    except JobCancelled as e:
+        update_job(job_id, status="cancelled", ended=time.time(), error=None)
+        append_log(job_id, f"[ANNULÉ] {e}")
+    except Exception as e:
+        update_job(job_id, status="error", error=str(e), ended=time.time())
+        append_log(job_id, f"[ERREUR] {e}")
+
+
 # ── Routes API ─────────────────────────────────────────────────────────────
 
 # 1. Page d'accueil
@@ -701,14 +814,90 @@ async def ping():
 async def get_config():
     tools = check_external_tools()
     return {
+        "version": app.version,
         "tools": tools,
         "port": PORT,
-        "workspace": str(Path(__file__).resolve().parent.parent.parent),
+        "workspace": str(WORKSPACE_ROOT),
         "convert_script": str(_convert_svc.script) if _convert_svc.available() else None,
         "subtitle_script": _subtitle_svc.script if _subtitle_svc.available() else None,
         "subtitle_python": _subtitle_svc.python,
         "native_picker": _zenity() is not None,
     }
+
+
+# 3.5. System resource usage
+@app.get("/api/system")
+async def system():
+    """Returns basic system resource usage (CPU load, memory)."""
+    import os
+    data = {"cpu_load": None, "memory": None, "swap": None, "gpu": None}
+    try:
+        # Load average (1, 5, 15 min)
+        if os.path.exists("/proc/loadavg"):
+            with open("/proc/loadavg") as f:
+                loads = f.read().split()
+                data["cpu_load"] = {
+                    "1min": float(loads[0]),
+                    "5min": float(loads[1]),
+                    "15min": float(loads[2]),
+                }
+        # Memory info
+        if os.path.exists("/proc/meminfo"):
+            mem = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        mem[key.strip()] = val.strip()
+            # Extract MemTotal and MemAvailable (Linux) or MemFree
+            mem_total = int(mem.get("MemTotal", "0 kB").split()[0])  # in kB
+            mem_avail = int(mem.get("MemAvailable", "0 kB").split()[0])
+            if mem_total > 0:
+                used = mem_total - mem_avail
+                data["memory"] = {
+                    "total": mem_total,
+                    "used": used,
+                    "percent": round(used / mem_total * 100, 1),
+                }
+            # Swap
+            swap_total = int(mem.get("SwapTotal", "0 kB").split()[0])
+            swap_free = int(mem.get("SwapFree", "0 kB").split()[0])
+            if swap_total > 0:
+                used_swap = swap_total - swap_free
+                data["swap"] = {
+                    "total": swap_total,
+                    "used": used_swap,
+                    "percent": round(used_swap / swap_total * 100, 1),
+                }
+    except Exception:
+        pass
+    # GPU info via nvidia-smi if available
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,utilization.memory,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split("\n")
+            gpus = []
+            for line in lines:
+                if line:
+                    util_gpu, util_mem, temp = line.split(", ")
+                    gpus.append(
+                        {
+                            "gpu_util": int(util_gpu),
+                            "mem_util": int(util_mem),
+                            "temp": int(temp),
+                        }
+                    )
+            data["gpu"] = gpus
+    except Exception:
+        pass
+    return data
 
 
 # 4. Browser de fichiers intégré (repli si zenity absent)
@@ -1095,6 +1284,177 @@ async def audio_export(req: ExportRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur d'export : {e}")
+
+
+# ── Montage au rythme (auto-cut beats) ─────────────────────────────────────
+
+class RhythmScanRequest(BaseModel):
+    """Sources du montage : une vidéo + une musique."""
+    video_path: str
+    audio_path: str
+
+
+class RhythmRequest(RhythmScanRequest):
+    """Paramètres complets du montage au rythme."""
+    ranks: list[int] = Field(default_factory=lambda: [1])
+    min_shot: float = 0.8
+    max_shot: float = 3.0
+    loop: bool = True
+    fps: float = 24.0
+    sample_rate: int = 22050
+    video_start: float = 0.0
+
+
+class RhythmExportRequest(BaseModel):
+    """Export d'un montage déjà calculé."""
+    job_id: int
+    fmt: str = "fcpxml"          # fcpxml | xml | edl | csv
+    include_audio: bool = True   # musique sur une piste liée (FCPXML)
+
+
+def _rhythm_sources(video_path: str, audio_path: str) -> tuple[dict, dict]:
+    """Valide les deux sources et retourne leurs infos ffprobe."""
+    video_path = os.path.abspath(str(video_path or ""))
+    audio_path = os.path.abspath(str(audio_path or ""))
+    if not os.path.isfile(video_path):
+        raise HTTPException(status_code=404,
+                            detail=f"Vidéo introuvable : {video_path}")
+    if not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404,
+                            detail=f"Musique introuvable : {audio_path}")
+
+    vinfo = probe(video_path)
+    ainfo = probe(audio_path)
+    if not vinfo.get("has_video"):
+        raise HTTPException(
+            status_code=400,
+            detail="Le fichier vidéo ne contient aucune piste image.",
+        )
+    if not ainfo.get("has_audio"):
+        raise HTTPException(
+            status_code=400,
+            detail="Le fichier musique ne contient aucune piste audio.",
+        )
+    if float(vinfo.get("duration") or 0.0) <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Durée de la vidéo inconnue (ffprobe).")
+    if float(ainfo.get("duration") or 0.0) <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Durée de la musique inconnue (ffprobe).")
+    return vinfo, ainfo
+
+
+@app.post("/api/rhythm/scan")
+async def rhythm_scan(req: RhythmScanRequest):
+    """Vérifie les sources et renvoie durées, format et estimation."""
+    vinfo, ainfo = _rhythm_sources(req.video_path, req.audio_path)
+    audio_duration = float(ainfo.get("duration") or 0.0)
+    est = estimates.estimate("audio", "default", audio_duration, files=1)
+    return {
+        "video": {
+            "path": vinfo.get("path"),
+            "name": os.path.basename(str(vinfo.get("path") or "")),
+            "duration": round(float(vinfo.get("duration") or 0.0), 3),
+            "width": int(vinfo.get("width") or 0),
+            "height": int(vinfo.get("height") or 0),
+            "fps": round(float(vinfo.get("fps") or 24.0), 3),
+        },
+        "audio": {
+            "path": ainfo.get("path"),
+            "name": os.path.basename(str(ainfo.get("path") or "")),
+            "duration": round(audio_duration, 3),
+        },
+        "estimate": est,
+    }
+
+
+@app.post("/api/rhythm/start")
+async def rhythm_start(req: RhythmRequest):
+    """Lance l'analyse des beats + le calcul du montage (job)."""
+    vinfo, ainfo = _rhythm_sources(req.video_path, req.audio_path)
+
+    ranks = sorted({int(r) for r in (req.ranks or []) if int(r) in (1, 2, 3)})
+    if not ranks:
+        ranks = [1]
+    min_shot = min(max(0.1, float(req.min_shot or 0.8)), 30.0)
+    max_shot = min(max(min_shot, float(req.max_shot or 3.0)), 60.0)
+    fps = min(max(1.0, float(req.fps or 24.0)), 120.0)
+
+    payload = {
+        "video_path": os.path.abspath(req.video_path),
+        "audio_path": os.path.abspath(req.audio_path),
+        "ranks": ranks,
+        "min_shot": round(min_shot, 3),
+        "max_shot": round(max_shot, 3),
+        "loop": bool(req.loop),
+        "fps": round(fps, 3),
+        "sample_rate": int(min(max(8000, req.sample_rate or 22050), 48000)),
+        "video_start": round(max(0.0, float(req.video_start or 0.0)), 3),
+    }
+    audio_duration = float(ainfo.get("duration") or 0.0)
+    est = estimates.estimate("audio", "default", audio_duration, files=1)
+    jid = create_job("rhythm", payload, estimate=est)
+    threading.Thread(target=_run_rhythm_job, args=(jid,), daemon=True).start()
+    return {
+        "id": jid,
+        "estimate": est,
+        "video_duration": round(float(vinfo.get("duration") or 0.0), 3),
+        "audio_duration": round(audio_duration, 3),
+    }
+
+
+@app.post("/api/rhythm/export")
+async def rhythm_export(req: RhythmExportRequest):
+    """Exporte le montage calculé (FCPXML, EDL ou CSV)."""
+    job = get_job(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job introuvable")
+    if job.get("type") != "rhythm":
+        raise HTTPException(status_code=400,
+                            detail="Ce job n'est pas un montage au rythme.")
+    if job.get("status") != "done" or not job.get("result"):
+        raise HTTPException(
+            status_code=409,
+            detail="Le montage n'est pas terminé ou n'a pas de résultat.",
+        )
+
+    result = job["result"]
+    cuts = result.get("cuts") or []
+    if not cuts:
+        raise HTTPException(status_code=409, detail="Aucun plan à exporter.")
+
+    fmt = (req.fmt or "fcpxml").lower()
+    ext = {"fcpxml": "fcpxml", "xml": "fcpxml", "edl": "edl",
+           "csv": "csv"}.get(fmt)
+    if not ext:
+        raise HTTPException(
+            status_code=400,
+            detail="Format invalide : utilisez fcpxml, edl ou csv.",
+        )
+
+    video_path = result.get("video_path") or ""
+    stem = os.path.splitext(os.path.basename(video_path))[0] or "montage"
+    try:
+        content = export_rhythm(
+            video_path,
+            cuts,
+            fps=float(result.get("fps") or 24.0),
+            fmt=fmt,
+            audio_path=result.get("audio_path"),
+            title=f"{stem}_rythme",
+            audio_duration=result.get("audio_duration"),
+            include_audio=bool(req.include_audio),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500,
+                            detail=f"Erreur d'export : {e}")
+
+    return PlainTextResponse(
+        content,
+        headers={"Content-Disposition":
+                 f'inline; filename="{stem}_rythme.{ext}"'},
+        media_type="text/plain",
+    )
 
 
 # ── DaVinci Resolve : installation du script de marqueurs ──────────────────

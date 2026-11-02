@@ -43,8 +43,15 @@ def _fraction(value: float):
 
 
 def _frames(seconds: float, fps: float) -> int:
-    """Convertit des secondes en nombre de frames (arrondi, min 0)."""
-    return max(0, int(round(float(seconds) * float(fps))))
+    """Convertit des secondes en nombre de frames (arrondi, min 0).
+
+    Arrondi round-half-up pour rester cohérent avec le script DaVinci
+    (`int(seconds * fps + 0.5)`) et l'EDL (`seconds_to_frames`) : sans cela,
+    le même beat peut tomber sur deux frames voisines selon le format
+    d'export.
+    """
+    from app.utils import seconds_to_frames
+    return seconds_to_frames(seconds, fps)
 
 
 def _time(frames: int, fps: float) -> str:
@@ -191,6 +198,27 @@ def markers_document(asset_path: str, fps: float, markers, title: str | None = N
     return _serialize(root)
 
 
+def _append_cut_clips(spine, video_path: str, fps: float, cuts,
+                      asset_duration: float) -> int:
+    """Ajoute un asset-clip par plan et retourne la durée totale en frames."""
+    offset_frames = 0
+    for index, cut in enumerate(cuts):
+        start_frames = _frames(float(cut.get("start") or 0.0), fps)
+        dur_frames = max(1, _frames(float(cut.get("duration") or 0.0), fps))
+        # Ne jamais dépasser le média source
+        if asset_duration and (start_frames + dur_frames) > _frames(asset_duration, fps):
+            dur_frames = max(1, _frames(asset_duration, fps) - start_frames)
+        ET.SubElement(spine, "asset-clip", {
+            "ref": "r2",
+            "offset": _time(offset_frames, fps),
+            "start": _time(start_frames, fps),
+            "duration": _time(dur_frames, fps),
+            "name": f"{os.path.splitext(os.path.basename(video_path))[0]} — plan {index + 1}",
+        })
+        offset_frames += dur_frames
+    return offset_frames
+
+
 def cuts_document(video_path: str, fps: float, cuts, title: str | None = None) -> str:
     """Timeline découpée : un asset-clip par plan détecté.
 
@@ -211,23 +239,81 @@ def cuts_document(video_path: str, fps: float, cuts, title: str | None = None) -
     )
     # La durée de séquence doit correspondre à la somme des plans
     sequence = root.find("./library/event/project/sequence")
-    offset_frames = 0
-    for index, cut in enumerate(cuts):
-        start_frames = _frames(float(cut.get("start") or 0.0), fps)
-        dur_frames = max(1, _frames(float(cut.get("duration") or 0.0), fps))
-        # Ne jamais dépasser le média source
-        if asset_duration and (start_frames + dur_frames) > _frames(asset_duration, fps):
-            dur_frames = max(1, _frames(asset_duration, fps) - start_frames)
-        ET.SubElement(spine, "asset-clip", {
-            "ref": "r2",
-            "offset": _time(offset_frames, fps),
-            "start": _time(start_frames, fps),
-            "duration": _time(dur_frames, fps),
-            "name": f"{os.path.splitext(os.path.basename(video_path))[0]} — plan {index + 1}",
-        })
-        offset_frames += dur_frames
+    offset_frames = _append_cut_clips(spine, video_path, fps, cuts,
+                                      asset_duration)
 
     if sequence is not None:
         sequence.set("duration", _time(offset_frames or _frames(total, fps), fps))
+
+    return _serialize(root)
+
+
+def rhythm_document(video_path: str, fps: float, cuts, title: str | None = None,
+                    audio_path: str | None = None,
+                    audio_duration: float | None = None,
+                    include_audio: bool = True) -> str:
+    """Timeline « montage au rythme » : plans vidéo + musique liée.
+
+    La musique est placée sur une piste connectée (``lane="-1"``), alignée sur
+    le début de la timeline. Elle est optionnelle : si l'import d'une piste
+    liée pose problème dans une version de Resolve, l'export sans musique
+    reste un FCPXML de coupes valide.
+
+    Args:
+        video_path : rush découpé.
+        fps : fps de la timeline.
+        cuts : liste de dicts {start, duration} (start = in-point source).
+        title : nom du projet.
+        audio_path : musique à poser sous les plans.
+        audio_duration : durée de la musique (sinon ffprobe).
+        include_audio : False = timeline vidéo seule.
+    """
+    title = title or os.path.splitext(os.path.basename(video_path))[0]
+    cuts = list(cuts or [])
+    total = sum(float(c.get("duration") or 0.0) for c in cuts)
+    if total <= 0:
+        total = float(probe(video_path).get("duration") or 1.0)
+
+    root, spine, info, asset_duration, _ = _base_document(
+        title, video_path, fps, total
+    )
+    resources = root.find("./resources")
+    sequence = root.find("./library/event/project/sequence")
+
+    offset_frames = _append_cut_clips(spine, video_path, fps, cuts,
+                                      asset_duration)
+
+    audio_frames = 0
+    if include_audio and audio_path and resources is not None:
+        audio_info = probe(audio_path)
+        audio_len = float(audio_duration or audio_info.get("duration") or 0.0)
+        if audio_len > 0:
+            audio_asset = ET.SubElement(resources, "asset", {
+                "id": "r3",
+                "name": os.path.basename(audio_path) or "music",
+                "start": "0s",
+                "duration": _time(_frames(audio_len, fps), fps),
+                "hasVideo": "0",
+                "hasAudio": "1",
+            })
+            ET.SubElement(audio_asset, "media-rep", {
+                "kind": "original-media",
+                "src": _file_url(audio_path),
+            })
+            # Piste connectée sous la spine, alignée sur 0.
+            audio_frames = min(_frames(audio_len, fps), offset_frames)
+            ET.SubElement(spine, "asset-clip", {
+                "ref": "r3",
+                "lane": "-1",
+                "offset": "0s",
+                "start": "0s",
+                "duration": _time(audio_frames, fps),
+                "name": os.path.basename(audio_path) or "music",
+                "audioRole": "music",
+            })
+
+    if sequence is not None:
+        sequence.set("duration",
+                     _time(offset_frames or _frames(total, fps), fps))
 
     return _serialize(root)

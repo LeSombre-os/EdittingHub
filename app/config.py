@@ -53,7 +53,28 @@ DEFAULT_FPS = 24                     # fps de référence pour l'EDL
 DEFAULT_AUDIO_SR = 22050             # sample rate pour librosa
 DEFAULT_RANK1_PERCENTILE = 66.0      # percentile pour le rang 1 (beats forts)
 DEFAULT_RANK2_PERCENTILE = 33.0      # percentile pour le rang 2 (beats moyens)
-MIN_BEAT_INTERVAL = 0.15             # intervalle minimum entre deux beats (s)
+
+# Intervalle minimum entre deux onsets distincts (s). Sert de `wait` au
+# peak-picking : un même transitoire ne doit pas déclencher deux marqueurs.
+# 80 ms laisse passer les doubles-croches jusqu'à ~180 BPM (2 par temps).
+MIN_BEAT_INTERVAL = 0.08
+# Résolution temporelle visée pour l'enveloppe d'onset (s). Un hop de 512
+# échantillons à 22050 Hz donnait 23 ms (plus d'une demi-image à 24 fps) et
+# décalait tous les marqueurs d'environ +20 ms.
+ONSET_HOP_SECONDS = 0.005
+# Seuil de peak-picking : hauteur minimale au-dessus de la moyenne locale,
+# en fraction de la dynamique globale de l'enveloppe (0-1).
+ONSET_DELTA = 0.07
+# Fenêtre de peak-picking : on exige un maximum local sur ±20 ms, jamais
+# ±150 ms (l'ancien réglage fusionnait des frappes distinctes).
+ONSET_PRE_MAX = 0.02
+# Fenêtre de la moyenne glissante qui sert de seuil adaptatif (s).
+ONSET_AVG_WINDOW = 0.10
+# Recherche du début d'attaque autour d'un onset détecté (s).
+ONSET_REFINE_SEARCH = 0.035
+# Retour maximal en arrière depuis le pic d'énergie (s) : évite de coller le
+# marqueur au transitoire précédent dans un passage dense.
+ONSET_REFINE_MAX_BACK = 0.012
 
 # Couleurs Resolve pour les marqueurs EDL
 RANK_COLORS = {
