@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn>=0.29
+scenedetect>=0.7.0
+librosa>=0.11.0
+numpy>=1.26
+opencv-python>=4.9
+soundfile>=0.13
+soxr>=0.4

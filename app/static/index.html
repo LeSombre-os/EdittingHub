@@ -1,0 +1,1663 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EdittingHub — Studio local de montage vidéo</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<style>
+:root{
+  --bg:#0b0d12; --bg2:#12151d; --card:#171b25; --card2:#1f2431;
+  --line:#2a3040; --line2:#3a435a;
+  --txt:#e9edf5; --mut:#95a0b8; --dim:#6b7690;
+  --acc:#6c8cff; --acc2:#9d6cff; --ok:#3ecf8e; --warn:#ffb224; --err:#ff6b6b;
+  --r:16px; --r2:11px; --r3:8px;
+  --conv:#6c8cff; --conv2:#8f6cff;
+  --sub:#00d4aa; --sub2:#00a8a8;
+  --scene:#ffb224; --scene2:#ff8c00;
+  --audio:#ff6b9e; --audio2:#ff8e6c;
+  --shadow:0 12px 34px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+.hidden{display:none!important}
+body{margin:0;min-height:100vh;color:var(--txt);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  background:
+    radial-gradient(1200px 600px at 12% -10%, rgba(108,140,255,.14), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(157,108,255,.11), transparent 55%),
+    linear-gradient(180deg,var(--bg2),var(--bg) 480px);
+  background-attachment:fixed;overflow-x:hidden}
+main{max-width:1060px;margin:0 auto;padding:26px 20px 60px}
+
+/* ── Header ─────────────────────────────────────────────── */
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;margin-bottom:20px}
+.brand{display:flex;align-items:center;gap:13px;min-width:0}
+.logo{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;
+  font-size:23px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+  box-shadow:0 8px 22px rgba(108,140,255,.35);flex:none;overflow:hidden}
+.logo img{width:100%;height:100%;display:block;border-radius:13px}
+.brand h1{margin:0;font-size:22px;font-weight:750;letter-spacing:.2px;line-height:1.15}
+.brand h1 span{background:linear-gradient(90deg,var(--acc),var(--acc2));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.brand p{margin:2px 0 0;color:var(--mut);font-size:12.5px}
+.status-pill{display:flex;align-items:center;gap:9px;padding:8px 14px;
+  background:var(--card);border:1px solid var(--line);border-radius:999px;
+  font-size:12.5px;color:var(--mut);white-space:nowrap}
+.status-dot{width:9px;height:9px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 4px rgba(62,207,142,.15);transition:.25s;flex:none}
+.status-dot.off{background:var(--err);box-shadow:0 0 0 4px rgba(255,107,107,.15)}
+
+/* ── Tabs ───────────────────────────────────────────────── */
+.tabs{position:sticky;top:10px;z-index:50;display:flex;gap:4px;
+  background:rgba(23,27,37,.92);backdrop-filter:blur(12px);
+  border:1px solid var(--line);border-radius:var(--r);
+  padding:5px;margin:0 0 20px;overflow-x:auto;scrollbar-width:none;box-shadow:var(--shadow)}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:1 0 auto;min-width:132px;text-align:center;padding:11px 14px;font-size:13px;
+  font-weight:600;cursor:pointer;border-radius:var(--r2);transition:.18s;
+  border:1px solid transparent;color:var(--mut);white-space:nowrap;background:none;
+  display:flex;align-items:center;justify-content:center;gap:7px;user-select:none;
+  font-family:inherit}
+.tab:hover{color:var(--txt);background:rgba(255,255,255,.045)}
+.tab:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tab.active{color:#fff;border-color:rgba(255,255,255,.18);
+  box-shadow:0 6px 18px rgba(108,140,255,.3)}
+.tab[data-tab="convert"].active{background:linear-gradient(135deg,var(--conv),var(--conv2))}
+.tab[data-tab="subtitles"].active{background:linear-gradient(135deg,var(--sub),var(--sub2))}
+.tab[data-tab="scenes"].active{background:linear-gradient(135deg,var(--scene),var(--scene2))}
+.tab[data-tab="audio"].active{background:linear-gradient(135deg,var(--audio),var(--audio2))}
+
+/* ── Panels ─────────────────────────────────────────────── */
+.panel{display:none;animation:fade .22s ease}
+.panel.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ── Cards ──────────────────────────────────────────────── */
+.card{background:linear-gradient(180deg,var(--card),rgba(18,21,29,.72));
+  border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin:16px 0;
+  box-shadow:0 1px 0 rgba(255,255,255,.03) inset}
+.card h2{margin:0 0 16px;font-size:12.5px;text-transform:uppercase;letter-spacing:1.1px;
+  color:var(--mut);font-weight:700;display:flex;align-items:center;gap:9px}
+.card h2::before{content:"";width:3px;height:15px;border-radius:2px;background:var(--acc)}
+.card[data-mod="convert"] h2::before{background:linear-gradient(var(--conv),var(--conv2))}
+.card[data-mod="subtitles"] h2::before{background:linear-gradient(var(--sub),var(--sub2))}
+.card[data-mod="scenes"] h2::before{background:linear-gradient(var(--scene),var(--scene2))}
+.card[data-mod="audio"] h2::before{background:linear-gradient(var(--audio),var(--audio2))}
+
+/* ── Form ───────────────────────────────────────────────── */
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.inp-group{flex:1;min-width:170px}
+/* Grille de champs : largeurs régulières, inputs pleine largeur */
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:12px;align-items:end;margin-top:12px}
+.fields .inp-group{min-width:0;flex:none}
+.fields input[type=number]{max-width:none}
+.label{font-size:11.5px;color:var(--mut);margin-bottom:5px;text-transform:uppercase;
+  letter-spacing:.6px;display:block;font-weight:600}
+input[type=text],input[type=number],select,textarea{
+  width:100%;background:var(--card2);border:1px solid var(--line);
+  color:var(--txt);border-radius:var(--r2);padding:10px 12px;font-size:14px;
+  outline:none;transition:border-color .18s,box-shadow .18s;font-family:inherit}
+input[type=text]::placeholder{color:var(--dim)}
+input:focus,select:focus,textarea:focus{border-color:var(--acc);
+  box-shadow:0 0 0 3px rgba(108,140,255,.14)}
+input[type=number]{max-width:110px}
+.option{display:flex;align-items:center;gap:8px;color:var(--mut);font-size:13.5px;margin-top:12px}
+.option input{accent-color:var(--acc);width:15px;height:15px;margin:0;cursor:pointer}
+.option label{cursor:pointer}
+
+/* ── Buttons ────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  border:0;border-radius:var(--r2);padding:10px 16px;font-size:13.5px;
+  font-weight:650;cursor:pointer;transition:.18s;white-space:nowrap;
+  font-family:inherit;line-height:1}
+.btn:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.btn-primary{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;
+  box-shadow:0 6px 16px rgba(108,140,255,.28)}
+.btn-primary:hover:not(:disabled){transform:translateY(-1px);
+  box-shadow:0 10px 22px rgba(108,140,255,.38)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;transform:none}
+.btn-ghost{background:var(--card2);border:1px solid var(--line);color:var(--txt);font-weight:550}
+.btn-ghost:hover{background:rgba(255,255,255,.06);border-color:var(--line2)}
+.btn-danger{background:rgba(255,107,107,.12);border:1px solid rgba(255,107,107,.4);
+  color:#ffb3b3;font-weight:600}
+.btn-danger:hover{background:rgba(255,107,107,.2)}
+.btn-sm{padding:7px 12px;font-size:12px}
+.btn-flex{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.btn-margin{margin-top:14px}
+
+/* ── Presets / chips ────────────────────────────────────── */
+.presets{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:4px}
+.presets.two{grid-template-columns:repeat(2,1fr)}
+.preset{border:1.5px solid var(--line);border-radius:12px;padding:13px 10px;cursor:pointer;
+  text-align:center;transition:.18s;background:rgba(255,255,255,.015)}
+.preset:hover{border-color:var(--line2);background:rgba(255,255,255,.04)}
+.preset.sel{border-color:var(--acc);background:rgba(108,140,255,.1);
+  box-shadow:0 0 0 3px rgba(108,140,255,.13)}
+.preset b{display:block;font-size:14px;margin-bottom:3px}
+.preset small{color:var(--mut);font-size:11.5px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;min-height:0}
+.chips:empty{margin-top:0}
+.chip{background:var(--card2);border:1px solid var(--line);border-radius:999px;
+  padding:6px 8px 6px 12px;font-size:12.5px;display:flex;gap:8px;align-items:center;
+  max-width:100%;animation:fade .18s ease}
+.chip .path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:430px;
+  direction:rtl;text-align:left;font-family:ui-monospace,"JetBrains Mono",monospace;font-size:12px}
+.chip button{padding:1px 7px;border-radius:999px;font-size:12px;line-height:1.5}
+
+/* ── File browser ───────────────────────────────────────── */
+.file-browser{margin-top:12px;border:1px solid var(--line);border-radius:var(--r2);
+  overflow:hidden;background:var(--bg2)}
+.crumbs{display:flex;gap:6px;flex-wrap:wrap;padding:9px 11px;background:var(--card2);
+  align-items:center;font-size:12.5px;min-height:38px}
+.crumbs .cur{color:var(--mut);padding:0 5px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:420px;font-family:ui-monospace,monospace;font-size:11.5px}
+.entries{max-height:270px;overflow:auto}
+.entry{display:flex;align-items:center;gap:10px;padding:8px 12px;
+  border-top:1px solid var(--line);font-size:13.5px;transition:background .12s}
+.entry.dir{cursor:pointer}
+.entry:hover{background:var(--card2)}
+.entry .ic{width:18px;text-align:center;flex:none}
+.entry .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.entry .sz{color:var(--dim);font-size:11.5px;flex:none;font-variant-numeric:tabular-nums}
+.entry .empty{padding:20px;color:var(--dim);text-align:center;width:100%}
+
+/* ── Notes ──────────────────────────────────────────────── */
+.note{border-radius:var(--r2);padding:11px 14px;font-size:13px;margin-top:12px;
+  border:1px solid transparent;display:flex;gap:9px;align-items:flex-start;line-height:1.45}
+.note.info{background:rgba(108,140,255,.1);border-color:rgba(108,140,255,.3);color:#b9c8ff}
+.note.okn{background:rgba(62,207,142,.1);border-color:rgba(62,207,142,.32);color:#9fe9c6}
+.note.warn{background:rgba(255,178,36,.1);border-color:rgba(255,178,36,.33);color:#ffd98a}
+.note.err{background:rgba(255,107,107,.1);border-color:rgba(255,107,107,.33);color:#ffb3b3}
+.note .nt{white-space:pre-wrap;word-break:break-word}
+
+/* ── Progress ───────────────────────────────────────────── */
+.bar{height:8px;background:var(--card2);border-radius:999px;overflow:hidden;margin:14px 0 4px}
+.bar i{display:block;height:100%;width:0;border-radius:999px;
+  background:linear-gradient(90deg,var(--ok),var(--acc));transition:width .35s ease}
+.bar.indeterminate i{width:35%;animation:slide 1.3s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+
+/* ── Stats ──────────────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  gap:11px;margin-top:16px}
+.stat{border-radius:var(--r2);padding:14px 12px;text-align:center;
+  border:1px solid var(--line);background:rgba(255,255,255,.02)}
+.stat .num{font-size:25px;font-weight:750;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat .lbl{font-size:11px;color:var(--mut);margin-top:5px;text-transform:uppercase;
+  letter-spacing:.6px}
+
+/* ── Table ──────────────────────────────────────────────── */
+.tbl-wrap{margin-top:16px;border:1px solid var(--line);border-radius:var(--r2);
+  overflow:auto;max-height:330px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+table th{text-align:left;padding:8px 11px;background:var(--card2);color:var(--mut);
+  position:sticky;top:0;font-weight:650;text-transform:uppercase;letter-spacing:.5px;
+  font-size:10.5px;z-index:1;border-bottom:1px solid var(--line)}
+table td{padding:7px 11px;border-top:1px solid var(--line);
+  font-variant-numeric:tabular-nums}
+table tbody tr:hover{background:rgba(255,255,255,.03)}
+.rank-1{color:var(--err)} .rank-2{color:var(--warn)} .rank-3{color:var(--ok)}
+tr.r1{background:rgba(255,107,107,.06)} tr.r2{background:rgba(255,178,36,.06)}
+tr.r3{background:rgba(62,207,142,.05)}
+
+/* ── Logs ───────────────────────────────────────────────── */
+.logs{margin-top:12px;max-height:190px;overflow:auto;background:#0a0c11;
+  border:1px solid var(--line);border-radius:var(--r2);padding:10px 12px;
+  font-family:ui-monospace,"JetBrains Mono",monospace;font-size:11.5px;
+  line-height:1.65;color:#aeb7c9;white-space:pre-wrap;word-break:break-word}
+.logs:empty{display:none}
+
+/* ── Toast ──────────────────────────────────────────────── */
+#toasts{position:fixed;right:18px;bottom:18px;z-index:999;display:flex;
+  flex-direction:column;gap:9px;max-width:min(420px,92vw)}
+.toast{padding:11px 15px;border-radius:var(--r2);font-size:13px;font-weight:550;
+  background:var(--card2);border:1px solid var(--line2);box-shadow:var(--shadow);
+  animation:fade .2s ease;display:flex;gap:9px;align-items:flex-start}
+.toast.ok{border-color:rgba(62,207,142,.4);color:#9fe9c6}
+.toast.err{border-color:rgba(255,107,107,.4);color:#ffb3b3}
+.toast.info{border-color:rgba(108,140,255,.4);color:#b9c8ff}
+
+/* ── Footer ─────────────────────────────────────────────── */
+footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
+  padding-top:18px;border-top:1px solid var(--line);display:flex;gap:14px;
+  justify-content:center;flex-wrap:wrap;align-items:center}
+.tool-status{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.tool-status span{display:inline-flex;align-items:center;gap:5px}
+.tool-status .y{color:var(--ok)} .tool-status .n{color:var(--err)}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media(max-width:640px){
+  main{padding:18px 13px 48px}
+  .brand h1{font-size:19px}
+  .logo{width:40px;height:40px;font-size:20px}
+  /* Les 4 onglets tiennent sans défilement : icône au-dessus du libellé */
+  .tabs{padding:4px;gap:3px}
+  .tab{min-width:0;flex:1 1 0;font-size:10.5px;padding:9px 3px;gap:4px;
+    flex-direction:column;line-height:1.25}
+  .card{padding:16px 15px}
+  .presets{grid-template-columns:1fr 1fr}
+  .chip .path{max-width:200px}
+  .row .inp-group{flex:1 1 100%}
+  .row .btn{flex:1 1 0}
+  header{justify-content:flex-start}
+  .status-pill{order:3;width:100%;justify-content:center}
+}
+@media(prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="brand">
+    <div class="logo"><img src="/static/icon.svg" alt="EdittingHub"></div>
+    <div>
+      <h1>Editting<span>Hub</span></h1>
+      <p>Studio local · conversion · sous-titrage · plans · audio</p>
+    </div>
+  </div>
+  <div class="status-pill">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Connexion…</span>
+  </div>
+</header>
+
+<!-- ── Onglets ───────────────────────────────────────────── -->
+<div class="tabs" role="tablist" aria-label="Modules">
+  <button class="tab active" role="tab" aria-selected="true" data-tab="convert"
+          aria-controls="panel-convert" id="tabbtn-convert">🎬 Conversion</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="subtitles"
+          aria-controls="panel-subtitles" id="tabbtn-subtitles">📝 Sous-titrage</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="scenes"
+          aria-controls="panel-scenes" id="tabbtn-scenes">✂️ Découpage</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="audio"
+          aria-controls="panel-audio" id="tabbtn-audio">🎵 Beats Audio</button>
+</div>
+
+<!-- ═══ PANNEAU 1 : CONVERSION ═══════════════════════════ -->
+<section class="panel active" id="panel-convert" role="tabpanel" aria-labelledby="tabbtn-convert">
+  <div class="card" data-mod="convert">
+    <h2>Fichiers à convertir</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="convPath">Chemin ou dossier</label>
+        <input id="convPath" type="text" placeholder="/media/…/Rush  ou  /media/…/musique.m4a"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="addPath('conv')">＋ Ajouter</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('conv')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFolder('conv')"
+              title="Choisir un dossier entier — traitement par lot">📁 Dossier</button>
+    </div>
+    <div class="chips" id="convChips"></div>
+    <div class="file-browser" id="browser-conv" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="convert">
+    <h2>Cible &amp; qualité</h2>
+    <div class="presets two" id="convTargets">
+      <div class="preset sel" data-t="resolve" role="button" tabindex="0" onclick="setConvTarget('resolve')">
+        <b>🎬 DaVinci Resolve</b><small>.mov DNxHR + PCM</small>
+      </div>
+      <div class="preset" data-t="tiktok" role="button" tabindex="0" onclick="setConvTarget('tiktok')">
+        <b>📱 TikTok</b><small>.mp4 H.264 + AAC</small>
+      </div>
+    </div>
+    <div class="presets" style="margin-top:12px" id="convPresets">
+      <div class="preset" data-p="lb" role="button" tabindex="0" onclick="setConvPreset('lb')"><b>Léger</b><small>~270 Mo/min</small></div>
+      <div class="preset sel" data-p="sq" role="button" tabindex="0" onclick="setConvPreset('sq')"><b>Équilibré</b><small>~1 Go/min</small></div>
+      <div class="preset" data-p="hq" role="button" tabindex="0" onclick="setConvPreset('hq')"><b>Max</b><small>~1,3 Go/min</small></div>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="convKeep4k">
+      <label for="convKeep4k">Garder la 4K (cible Resolve uniquement)</label>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="convForce">
+      <label for="convForce">Tout reconvertir (ignorer les sorties existantes)</label>
+    </div>
+    <div class="inp-group" style="max-width:220px;margin-top:14px">
+      <label class="label" for="convJobs">Conversions parallèles</label>
+      <input id="convJobs" type="number" min="1" max="32" value="4">
+    </div>
+  </div>
+
+  <div class="card" data-mod="convert">
+    <h2>Exécution</h2>
+    <div class="btn-flex">
+      <button class="btn btn-ghost" type="button" onclick="scanConvert()">🔍 Vérifier (poids prévu)</button>
+      <button class="btn btn-primary" type="button" id="convGo" onclick="startConvert()" disabled>⚡ Convertir</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="convCancel" onclick="cancelJob('conv')">Arrêter</button>
+    </div>
+    <div id="convMsg" aria-live="polite"></div>
+    <div class="bar" id="convBar" style="display:none"><i></i></div>
+    <div id="convResult" class="hidden">
+      <div class="stats">
+        <div class="stat"><div class="num" id="convOk" style="color:var(--ok)">–</div><div class="lbl">Convertis</div></div>
+        <div class="stat"><div class="num" id="convSkip" style="color:var(--mut)">–</div><div class="lbl">Déjà OK</div></div>
+        <div class="stat"><div class="num" id="convFail" style="color:var(--err)">–</div><div class="lbl">Échecs</div></div>
+      </div>
+    </div>
+    <div class="logs" id="convLogs"></div>
+  </div>
+</section>
+
+<!-- ═══ PANNEAU 2 : SOUS-TITRAGE ═════════════════════════ -->
+<section class="panel" id="panel-subtitles" role="tabpanel" aria-labelledby="tabbtn-subtitles">
+  <div class="card" data-mod="subtitles">
+    <h2>Fichiers à transcrire</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="subPath">Chemin ou dossier</label>
+        <input id="subPath" type="text" placeholder="/media/…/film.mp4  ou  /media/…/audio.wav"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="addPath('sub')">＋ Ajouter</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('sub')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFolder('sub')"
+              title="Choisir un dossier entier — traitement par lot">📁 Dossier</button>
+    </div>
+    <div class="chips" id="subChips"></div>
+    <div class="file-browser" id="browser-sub" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="subtitles">
+    <h2>Paramètres</h2>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="subLang">Langue</label>
+        <select id="subLang">
+          <option value="auto">Auto (détection)</option>
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+      <div class="inp-group">
+        <label class="label" for="subModel">Modèle Whisper</label>
+        <select id="subModel">
+          <option value="small">Small — équilibré</option>
+          <option value="base">Base — rapide</option>
+          <option value="medium">Medium — précis</option>
+          <option value="turbo">Turbo — chansons</option>
+        </select>
+      </div>
+    </div>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="subDevice">Périphérique</label>
+        <select id="subDevice">
+          <option value="auto">Auto (GPU si dispo)</option>
+          <option value="cpu">CPU</option>
+          <option value="gpu">GPU</option>
+        </select>
+      </div>
+      <div class="inp-group">
+        <label class="label" for="subOffset">Décalage (s)</label>
+        <input id="subOffset" type="number" step="0.1" value="0">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="subMode">Mode</label>
+        <select id="subMode">
+          <option value="phrases">Phrases</option>
+          <option value="mots">Mot à mot</option>
+        </select>
+      </div>
+      <div class="inp-group">
+        <label class="label" for="subWpc">Mots / sous-titre</label>
+        <input id="subWpc" type="number" min="1" max="10" value="1">
+      </div>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="subMusic">
+      <label for="subMusic">Mode chanson (VAD désactivé)</label>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="subForce">
+      <label for="subForce">Tout retranscrire (ignorer les .srt existants)</label>
+    </div>
+  </div>
+
+  <div class="card" data-mod="subtitles">
+    <h2>Exécution</h2>
+    <div class="btn-flex">
+      <button class="btn btn-ghost" type="button" onclick="scanSubtitles()">🔍 Vérifier</button>
+      <button class="btn btn-primary" type="button" id="subGo" onclick="startSubtitles()" disabled>🎙️ Transcrire</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="subCancel" onclick="cancelJob('sub')">Arrêter</button>
+    </div>
+    <div id="subMsg" aria-live="polite"></div>
+    <div class="bar" id="subBar" style="display:none"><i></i></div>
+    <div id="subResult" class="hidden">
+      <div class="stats">
+        <div class="stat"><div class="num" id="subOk" style="color:var(--ok)">–</div><div class="lbl">Transcrits</div></div>
+        <div class="stat"><div class="num" id="subSkip" style="color:var(--mut)">–</div><div class="lbl">Déjà OK</div></div>
+        <div class="stat"><div class="num" id="subFail" style="color:var(--err)">–</div><div class="lbl">Échecs</div></div>
+      </div>
+    </div>
+    <div class="logs" id="subLogs"></div>
+  </div>
+</section>
+
+<!-- ═══ PANNEAU 3 : DÉCOUPAGE DE PLANS ═══════════════════ -->
+<section class="panel" id="panel-scenes" role="tabpanel" aria-labelledby="tabbtn-scenes">
+  <div class="card" data-mod="scenes">
+    <h2>Vidéos à analyser (lot possible)</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="scenePath">Fichier ou dossier vidéo</label>
+        <input id="scenePath" type="text" placeholder="/media/…/film.mp4  ou  /media/…/rushs/"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="addPath('scene')">＋ Ajouter</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('scene')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFolder('scene')"
+              title="Choisir un dossier entier — traitement par lot">📁 Dossier</button>
+    </div>
+    <div class="chips" id="sceneChips"></div>
+    <div class="file-browser" id="browser-scene" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="scenes">
+    <h2>Paramètres</h2>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="sceneThreshold">Seuil (1–100)</label>
+        <input id="sceneThreshold" type="number" min="1" max="100" value="30">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="sceneMinLen">Durée min (s)</label>
+        <input id="sceneMinLen" type="number" min="0.1" step="0.1" value="1.0">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="sceneDownscale">Downscale</label>
+        <select id="sceneDownscale">
+          <option value="1">1× — native</option>
+          <option value="2" selected>2× — rapide</option>
+          <option value="3">3× — très rapide</option>
+        </select>
+      </div>
+      <div class="inp-group">
+        <label class="label" for="sceneFps">FPS (export EDL)</label>
+        <input id="sceneFps" type="number" min="1" max="120" value="24">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-mod="scenes">
+    <h2>Détection</h2>
+    <div class="btn-flex">
+      <button class="btn btn-ghost" type="button" id="sceneScan" onclick="scanScenes()">🔍 Vérifier (durée estimée)</button>
+      <button class="btn btn-primary" type="button" id="sceneGo" onclick="startSceneDetect()" disabled>🔍 Détecter les plans</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="sceneCancel" onclick="cancelJob('scene')">Arrêter</button>
+    </div>
+    <div id="sceneMsg" aria-live="polite"></div>
+    <div class="bar" id="sceneBar" style="display:none"><i></i></div>
+    <div id="sceneResult" class="hidden">
+      <div class="stats" id="sceneStats"></div>
+      <div class="row hidden" id="scenePickWrap" style="margin-top:14px">
+        <div class="inp-group" style="max-width:420px">
+          <label class="label" for="sceneFilePick">Fichier affiché</label>
+          <select id="sceneFilePick" onchange="selectSceneFile(this.value)"></select>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Début</th><th>Fin</th><th>Durée</th><th>Début (s)</th></tr></thead>
+          <tbody id="sceneTbody"></tbody>
+        </table>
+      </div>
+      <div class="btn-flex btn-margin">
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportScenes('edl')">📥 EDL</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportScenes('xml')">📥 XML</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportScenes('csv')">📥 CSV</button>
+        <span class="hidden" id="sceneZipWrap" style="display:inline-flex;gap:6px;align-items:center">
+          <select id="sceneZipFmt" style="width:auto;padding:7px 10px;font-size:12px">
+            <option value="xml">XML</option>
+            <option value="edl">EDL</option>
+            <option value="csv">CSV</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="exportScenesZip()">📦 Tout (ZIP)</button>
+        </span>
+      </div>
+    </div>
+    <div class="logs" id="sceneLogs"></div>
+  </div>
+</section>
+
+<!-- ═══ PANNEAU 4 : BEATS AUDIO ══════════════════════════ -->
+<section class="panel" id="panel-audio" role="tabpanel" aria-labelledby="tabbtn-audio">
+  <div class="card" data-mod="audio">
+    <h2>Pistes à analyser (lot possible)</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="audioPath">Fichier audio, vidéo ou dossier</label>
+        <input id="audioPath" type="text" placeholder="/media/…/musique.mp3  ou  /media/…/film.mp4"
+               autocomplete="off" spellcheck="false">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="addPath('audio')">＋ Ajouter</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('audio')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+      <button class="btn btn-ghost" type="button" onclick="browseFolder('audio')"
+              title="Choisir un dossier entier — traitement par lot">📁 Dossier</button>
+    </div>
+    <div class="chips" id="audioChips"></div>
+    <div class="file-browser" id="browser-audio" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="audio">
+    <h2>Paramètres</h2>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="audioSr">Sample rate (Hz)</label>
+        <input id="audioSr" type="number" min="8000" max="48000" step="100" value="22050">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="audioFps">FPS (export EDL)</label>
+        <input id="audioFps" type="number" min="1" max="120" value="24">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-mod="audio">
+    <h2>Analyse</h2>
+    <div class="btn-flex">
+      <button class="btn btn-ghost" type="button" id="audioScan" onclick="scanAudio()">🔍 Vérifier (durée estimée)</button>
+      <button class="btn btn-primary" type="button" id="audioGo" onclick="startAudioAnalyze()" disabled>🎵 Analyser les beats</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="audioCancel" onclick="cancelJob('audio')">Arrêter</button>
+    </div>
+    <div id="audioMsg" aria-live="polite"></div>
+    <div class="bar" id="audioBar" style="display:none"><i></i></div>
+    <div id="audioResult" class="hidden">
+      <div class="stats" id="audioStats"></div>
+      <div class="row hidden" id="audioPickWrap" style="margin-top:14px">
+        <div class="inp-group" style="max-width:420px">
+          <label class="label" for="audioFilePick">Fichier affiché</label>
+          <select id="audioFilePick" onchange="selectAudioFile(this.value)"></select>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Rang</th><th>Temps (s)</th><th>Énergie</th><th>Type</th></tr></thead>
+          <tbody id="audioTbody"></tbody>
+        </table>
+      </div>
+      <div class="btn-flex btn-margin">
+        <button class="btn btn-primary btn-sm" type="button" onclick="installDavinci()"
+                title="Écrit le script dans le menu Workspace → Scripts de DaVinci">⚡ Envoyer à DaVinci</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeats('davinci_script')"
+                title="Télécharge le script Python (installation manuelle ou collage console)">🐍 Télécharger le .py</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeats('csv')">📥 CSV</button>
+        <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeats('fcpxml')">🎬 FCPXML</button>
+        <span style="display:inline-flex;gap:4px;align-items:center;margin-left:8px">
+          <label style="font-size:11px;color:var(--muted)">Rangs :</label>
+          <label style="display:inline-flex;align-items:center;gap:2px;font-size:11px">
+            <input type="checkbox" id="rank1" checked> 1
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:2px;font-size:11px">
+            <input type="checkbox" id="rank2" checked> 2
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:2px;font-size:11px">
+            <input type="checkbox" id="rank3"> 3
+          </label>
+        </span>
+        <span class="hidden" id="audioZipWrap" style="display:inline-flex;gap:6px;align-items:center">
+          <select id="audioZipFmt" style="width:auto;padding:7px 10px;font-size:12px">
+            <option value="fcpxml">🎬 FCPXML</option>
+            <option value="edl">EDL</option>
+            <option value="csv">CSV</option>
+            <option value="davinci_script">🐍 Script DaVinci</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeatsZip()">📦 Tout (ZIP)</button>
+        </span>
+      </div>
+      <details class="davinci-help" style="margin-top:10px;font-size:12px;color:var(--muted)">
+        <summary style="cursor:pointer;font-weight:600">📖 Mettre les marqueurs dans DaVinci Resolve — mode d'emploi</summary>
+        <div style="padding:12px;background:var(--card2);border:1px solid var(--line);border-radius:8px;margin-top:8px;line-height:1.6">
+          <p style="margin:0 0 10px"><b>Méthode 1 — la plus simple (recommandée)</b></p>
+          <ol style="margin:0 0 14px;padding-left:20px">
+            <li>Analysez la musique, cochez les rangs voulus.</li>
+            <li>Cliquez <b>⚡ Envoyer à DaVinci</b>.</li>
+            <li>Dans Resolve : <b>Workspace → Scripts → EdittingHub Beat Markers</b>.</li>
+            <li>Ouvrez la timeline où doit aller la musique, puis relancez le script depuis le menu.</li>
+          </ol>
+          <p style="margin:0 0 6px;color:var(--warn)">⚠ La <u>toute première</u> installation demande de redémarrer DaVinci Resolve (il ne lit le dossier Scripts qu'au démarrage). Ensuite, plus besoin : le fichier est relu à chaque clic.</p>
+          <p style="margin:0 0 14px">Le script se place dans <code>~/.local/share/DaVinciResolve/Fusion/Scripts/Utility/</code>. Vous pouvez le lancer autant de fois que vous voulez, sur n'importe quelle timeline ouverte.</p>
+
+          <p style="margin:0 0 10px"><b>Méthode 2 — sans redémarrage (console)</b></p>
+          <ol style="margin:0 0 14px;padding-left:20px">
+            <li>Cliquez <b>🐍 Télécharger le .py</b> et ouvrez le fichier dans un éditeur de texte.</li>
+            <li>Dans Resolve : <b>Workspace → Console</b> (<kbd>Alt+Maj+C</kbd>), onglet <b>Python</b> (surtout pas Lua).</li>
+            <li>Copiez tout le contenu du fichier, collez-le, puis <kbd>Ctrl+Entrée</kbd>.</li>
+          </ol>
+          <p style="margin:0 0 14px">Le script n'importe rien et n'utilise que l'objet <code>resolve</code> déjà fourni par Resolve : c'est ce qui évite le plantage (SIGSEGV) provoqué par les anciens scripts qui rechargeaient <code>fusionscript.so</code>.</p>
+
+          <p style="margin:0 0 10px"><b>Résultat attendu</b></p>
+          <pre style="margin:0 0 14px;padding:8px;background:var(--card);border-radius:6px;overflow-x:auto">Timeline  : Ma timeline
+FPS       : 24.0
+Marqueurs : 101 / 101
+OK - marqueurs ajoutes sur la timeline active.</pre>
+          <p style="margin:0 0 14px">Les marqueurs apparaissent sur la règle de temps : <b>rouge</b> = rang 1 (impact fort), <b>jaune</b> = rang 2 (intermédiaire), <b>bleu</b> = rang 3 (micro-variations).</p>
+
+          <p style="margin:0 0 10px"><b>Si ça ne marche pas</b></p>
+          <ul style="margin:0 0 14px;padding-left:20px">
+            <li><b>« objet resolve introuvable »</b> → le script a été lancé depuis un terminal externe. Sur Resolve Free Linux, le scripting externe renvoie toujours <code>None</code> : passez par le menu Scripts ou la console.</li>
+            <li><b>« aucune timeline active »</b> → double-cliquez une timeline dans le Media Pool, puis relancez.</li>
+            <li><b>L'entrée n'apparaît pas dans Workspace → Scripts</b> → redémarrez Resolve (première installation uniquement).</li>
+            <li><b>Rien ne s'affiche sur la règle</b> → cliquez sur la timeline pour lui donner le focus, puis relancez.</li>
+          </ul>
+
+          <p style="margin:0 0 10px"><b>Et les exports fichier ?</b></p>
+          <p style="margin:0">CSV, EDL et FCPXML restent disponibles (archivage, autres logiciels). En revanche, l'import FCPXML/EDL dans <b>Resolve Free sous Linux</b> ne restitue pas les marqueurs : c'est une limite du logiciel, pas de l'export. Pour Resolve, utilisez le script.</p>
+        </div>
+      </details>
+    </div>
+    <div class="logs" id="audioLogs"></div>
+  </div>
+</section>
+
+<footer>
+  <span>EdittingHub v1.3 · 100 % local · Zorin OS</span>
+  <span class="tool-status" id="toolStatus"></span>
+</footer>
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script>
+'use strict';
+
+/* ══════════════════════════════════════════════════════════════════════════
+   EdittingHub — Frontend vanilla (0 dépendance, 100 % local)
+
+   - « Parcourir » ouvre le VRAI sélecteur du bureau (zenity via /api/pick),
+     avec repli automatique sur l'explorateur intégré.
+   - Chaque module accepte un LOT (fichiers multiples ou dossier).
+   - Durée estimée affichée avant lancement + temps restant en direct.
+   - « Arrêter » tue réellement le groupe de processus (ffmpeg/whisper) :
+     l'UI attend la confirmation du serveur avant d'afficher « interrompu ».
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const $  = (id) => document.getElementById(id);
+
+const ALL_CTX   = ['conv', 'sub', 'scene', 'audio'];
+const MSG       = { conv:'convMsg', sub:'subMsg', scene:'sceneMsg', audio:'audioMsg' };
+const LOGS      = { conv:'convLogs', sub:'subLogs', scene:'sceneLogs', audio:'audioLogs' };
+const GO_BTN    = { conv:'convGo', sub:'subGo', scene:'sceneGo', audio:'audioGo' };
+const CANCEL_BTN= { conv:'convCancel', sub:'subCancel', scene:'sceneCancel', audio:'audioCancel' };
+const BAR       = { conv:'convBar', sub:'subBar', scene:'sceneBar', audio:'audioBar' };
+const RESULT    = { conv:'convResult', sub:'subResult', scene:'sceneResult', audio:'audioResult' };
+const JOB_LABEL = { conv:'Conversion', sub:'Transcription', scene:'Détection de plans', audio:'Analyse audio' };
+
+/* Filtres du sélecteur natif : « Libellé|motif motif;Libellé2|motif » */
+const FILTERS = {
+  conv:  'Vidéos|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.webm;Audio|*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus',
+  sub:   'Médias|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.mp3 *.wav *.m4a *.flac *.ogg *.opus',
+  scene: 'Vidéos|*.mp4 *.mkv *.mov *.avi *.m4v *.mts *.m2ts *.mxf *.webm',
+  audio: 'Audio et vidéo|*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.oga *.opus *.mp4 *.mkv *.mov *.avi',
+};
+
+const VID_RE = /\.(mp4|m4v|mkv|avi|mov|mts|m2ts|mxf|ts|vob|webm)$/i;
+const AUD_RE = /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|wma|aiff|aif)$/i;
+
+const S = {
+  conv:  { paths:[], target:'resolve', preset:'sq', jobId:null, scan:null, timer:null,
+           busy:false, estimate:null, cancelling:false },
+  sub:   { paths:[], jobId:null, scan:null, timer:null, busy:false,
+           estimate:null, cancelling:false },
+  scene: { paths:[], jobId:null, result:null, files:[], fileIndex:0, fps:24,
+           timer:null, busy:false, scan:null, estimate:null, cancelling:false },
+  audio: { paths:[], jobId:null, result:null, files:[], fileIndex:0, fps:24,
+           timer:null, busy:false, scan:null, estimate:null, cancelling:false },
+  config: null,
+  browserCtx: null,
+  browserPath: '',
+  serverOk: false,
+};
+
+/* ── Helpers génériques ─────────────────────────────────────────────────── */
+function escapeHtml(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+function escapeAttr(s){
+  return escapeHtml(s).replace(/'/g,'&#39;');
+}
+function fmtSize(n){
+  n = Number(n) || 0;
+  const u = ['o','Ko','Mo','Go','To'];
+  let i = 0;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+  const txt = i === 0 ? String(Math.round(n))
+                      : n.toFixed(n >= 100 ? 0 : 1).replace('.', ',');
+  return txt + ' ' + u[i];
+}
+function fmtDuration(s){
+  s = Math.max(0, Math.round(Number(s) || 0));
+  const sec = s % 60, min = Math.floor(s / 60) % 60, h = Math.floor(s / 3600);
+  const p = (x) => String(x).padStart(2, '0');
+  return h ? `${h}:${p(min)}:${p(sec)}` : `${min}:${p(sec)}`;
+}
+function nameFromPath(p){
+  if (!p) return 'sortie';
+  const base = String(p).split('/').filter(Boolean).pop() || 'sortie';
+  return base.replace(/\.[^.]+$/, '') || 'sortie';
+}
+function clampInt(v, min, max, def){
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+}
+function clampNum(v, min, max, def){
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+}
+function toast(message, type){
+  const box = $('toasts');
+  if (!box) return;
+  const el = document.createElement('div');
+  el.className = 'toast ' + (type || 'info');
+  el.textContent = message;
+  box.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity .3s';
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 320);
+  }, 3400);
+}
+function setMsg(key, html){ const el = $(MSG[key]); if (el) el.innerHTML = html; }
+function errNote(msg){ return `<div class="note err">❌ <span class="nt">${escapeHtml(msg)}</span></div>`; }
+function clearResult(key){ const el = $(RESULT[key]); if (el) el.classList.add('hidden'); }
+function showBar(key){
+  const b = $(BAR[key]);
+  if (!b) return;
+  b.style.display = 'block';
+  b.classList.add('indeterminate');
+  b.querySelector('i').style.width = '';
+}
+function hideBar(key){
+  const b = $(BAR[key]);
+  if (!b) return;
+  b.style.display = 'none';
+  b.classList.remove('indeterminate');
+  b.querySelector('i').style.width = '0%';
+}
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename || 'export';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function estimateNote(est){
+  return est && est.human ? ` · ⏱ ~${est.human}` : '';
+}
+
+/* ── HTTP ───────────────────────────────────────────────────────────────── */
+async function postJSON(url, body){
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let data = null;
+  try { data = await r.json(); } catch (_) { /* pas de JSON */ }
+  if (!r.ok){
+    const detail = data && (data.detail || data.error);
+    const msg = typeof detail === 'string' ? detail
+              : detail ? JSON.stringify(detail) : ('HTTP ' + r.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+async function postBinary(url, body){
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok){
+    let msg = 'HTTP ' + r.status;
+    try {
+      const d = await r.json();
+      if (d.detail) msg = typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail);
+    } catch (_) { /* ignore */ }
+    throw new Error(msg);
+  }
+  const blob = await r.blob();
+  const cd = r.headers.get('Content-Disposition') || '';
+  const m = /filename="?([^";]+)"?/.exec(cd);
+  return { blob, filename: m ? m[1] : 'export.txt' };
+}
+
+/* ── Init ───────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  loadConfig();
+  checkServer();
+  setInterval(checkServer, 10000);
+
+  // Navigation clavier sur les onglets (flèches gauche/droite)
+  const tabs = Array.from(document.querySelectorAll('.tab'));
+  tabs.forEach((btn, i) => {
+    // Clic souris / tactile : indispensable (les boutons n'ont pas d'onclick inline)
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    btn.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      const dir = e.key === 'ArrowRight' ? 1 : -1;
+      const next = tabs[(i + dir + tabs.length) % tabs.length];
+      next.focus();
+      switchTab(next.dataset.tab);
+    });
+  });
+
+  // Entrée = ajouter le chemin saisi
+  ALL_CTX.forEach((ctx) => {
+    const inp = $(ctx + 'Path');
+    if (inp) inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter'){ e.preventDefault(); addPath(ctx); }
+    });
+  });
+});
+
+async function loadConfig(){
+  try {
+    const r = await fetch('/api/config', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    S.config = await r.json();
+    renderToolStatus(S.config.tools || {});
+    updateModuleAvailability();
+  } catch (e) {
+    const el = $('toolStatus');
+    if (el) el.innerHTML = '<span class="n">✗ configuration indisponible</span>';
+  }
+}
+function renderToolStatus(t){
+  const el = $('toolStatus');
+  if (!el) return;
+  const items = [
+    ['ffmpeg', t.ffmpeg], ['ffprobe', t.ffprobe],
+    ['scenedetect', t.scenedetect], ['librosa', t.librosa],
+    ['convert.py', t.convert_script], ['transcrire.py', t.subtitles_script],
+  ];
+  el.innerHTML = items.map(([k, v]) =>
+    `<span class="${v ? 'y' : 'n'}">${v ? '✓' : '✗'} ${escapeHtml(k)}</span>`
+  ).join('');
+}
+async function checkServer(){
+  try {
+    const r = await fetch('/api/ping', { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    $('statusDot').classList.remove('off');
+    $('statusText').textContent = 'Serveur local actif';
+    S.serverOk = true;
+  } catch (e) {
+    $('statusDot').classList.add('off');
+    $('statusText').textContent = 'Serveur hors ligne';
+    S.serverOk = false;
+  }
+}
+
+/* ── Onglets ────────────────────────────────────────────────────────────── */
+function switchTab(tab){
+  document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach((t) => {
+    t.classList.remove('active');
+    t.setAttribute('aria-selected', 'false');
+  });
+  const panel = $('panel-' + tab);
+  if (panel) panel.classList.add('active');
+  const btn = document.querySelector('.tab[data-tab="' + tab + '"]');
+  if (btn){ btn.classList.add('active'); btn.setAttribute('aria-selected', 'true'); }
+  // Ferme tous les navigateurs de fichiers pour éviter tout état résiduel
+  ALL_CTX.forEach(hideBrowser);
+}
+
+/* ── Gestion des chemins ────────────────────────────────────────────────── */
+function invalidateScan(ctx){
+  if (S[ctx]) S[ctx].scan = null;
+}
+function pushPath(ctx, path){
+  path = String(path || '').trim();
+  if (!path) return;
+  if (!S[ctx].paths.includes(path)) S[ctx].paths.push(path);
+  invalidateScan(ctx);
+}
+function addPath(ctx){
+  const input = $(ctx + 'Path');
+  if (!input) return;
+  const raw = (input.value || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!raw) return;
+  const parts = raw.includes(',')
+    ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+    : [raw];
+  parts.forEach((p) => pushPath(ctx, p));
+  input.value = '';
+  renderChips(ctx);
+}
+function delPath(ctx, i){
+  S[ctx].paths.splice(i, 1);
+  invalidateScan(ctx);
+  renderChips(ctx);
+}
+function renderChips(ctx){
+  const el = $(ctx + 'Chips');
+  if (!el) return;
+  el.innerHTML = S[ctx].paths.map((p, i) => `
+    <span class="chip">
+      <span class="path" title="${escapeAttr(p)}">${escapeHtml(p)}</span>
+      <button class="btn btn-ghost btn-sm" type="button"
+              onclick="delPath('${ctx}',${i})" aria-label="Retirer">✕</button>
+    </span>`).join('');
+  updateModuleAvailability();
+}
+function updateModuleAvailability(){
+  if (!S.config) return;
+  const t = S.config.tools || {};
+  const set = (id, ok) => { const b = $(id); if (b) b.disabled = !ok; };
+  set('convGo',  S.conv.paths.length  > 0 && t.convert_script);
+  set('subGo',   S.sub.paths.length   > 0 && t.subtitles_script);
+  set('sceneGo', S.scene.paths.length > 0 && t.scenedetect);
+  set('audioGo', S.audio.paths.length > 0 && t.librosa);
+}
+
+/* ── Sélecteur NATIF (vrai explorateur du système) ──────────────────────── */
+async function nativePick(ctx, kind){
+  const params = new URLSearchParams({
+    kind,
+    multiple: 'true',
+    title: kind === 'folder' ? 'Choisir un dossier' : 'Choisir des fichiers',
+  });
+  if (kind !== 'folder') params.set('exts', FILTERS[ctx] || '');
+  const r = await fetch('/api/pick?' + params.toString(), { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function browseFiles(ctx){
+  try {
+    const data = await nativePick(ctx, 'files');
+    if (!data.ok){
+      toast(data.reason ? `Sélecteur natif indisponible (${data.reason}) — explorateur intégré`
+                        : 'Explorateur intégré', 'info');
+      openBrowser(ctx);
+      return;
+    }
+    const paths = data.paths || [];
+    if (data.cancelled || !paths.length) return;
+    paths.forEach((p) => pushPath(ctx, p));
+    renderChips(ctx);
+    toast(`${paths.length} élément(s) ajouté(s)`, 'ok');
+  } catch (e) {
+    toast('Sélecteur natif indisponible — explorateur intégré', 'info');
+    openBrowser(ctx);
+  }
+}
+
+async function browseFolder(ctx){
+  try {
+    const data = await nativePick(ctx, 'folder');
+    if (!data.ok){
+      toast(data.reason ? `Sélecteur natif indisponible (${data.reason}) — explorateur intégré`
+                        : 'Explorateur intégré', 'info');
+      openBrowser(ctx);
+      return;
+    }
+    const paths = data.paths || [];
+    if (data.cancelled || !paths.length) return;
+    pushPath(ctx, paths[0]);
+    renderChips(ctx);
+    toast('Dossier ajouté (traitement par lot)', 'ok');
+  } catch (e) {
+    toast('Sélecteur natif indisponible — explorateur intégré', 'info');
+    openBrowser(ctx);
+  }
+}
+
+/* ── Explorateur intégré (repli) ────────────────────────────────────────── */
+function hideBrowser(ctx){
+  const b = $('browser-' + ctx);
+  if (b){ b.style.display = 'none'; b.innerHTML = ''; }
+}
+function closeBrowser(){
+  if (S.browserCtx) hideBrowser(S.browserCtx);
+}
+function openBrowser(ctx){
+  ALL_CTX.forEach((c) => { if (c !== ctx) hideBrowser(c); });
+  S.browserCtx = ctx;
+  browse('');
+}
+async function browse(path){
+  const ctx = S.browserCtx;
+  if (!ctx) return;
+  const box = $('browser-' + ctx);
+  if (!box) return;
+  box.style.display = 'block';
+  box.innerHTML = '<div class="crumbs"><span class="cur">Chargement…</span></div>';
+  try {
+    const r = await fetch('/api/ls?path=' + encodeURIComponent(path || ''), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    S.browserPath = data.path;
+
+    let crumbs = '';
+    (data.roots || []).forEach((root) => {
+      const label = root === '/' ? '/ racine' : root.split('/').filter(Boolean).pop();
+      crumbs += `<button class="btn btn-ghost btn-sm" type="button"
+        onclick="browse('${escapeAttr(root)}')" title="${escapeAttr(root)}">⌂ ${escapeHtml(label)}</button>`;
+    });
+    crumbs += `<span class="cur" title="${escapeAttr(data.path)}">${escapeHtml(data.path)}</span>`;
+    if (data.parent){
+      crumbs += `<button class="btn btn-ghost btn-sm" type="button"
+        onclick="browse('${escapeAttr(data.parent)}')">⬆</button>`;
+    }
+    crumbs += `<button class="btn btn-ghost btn-sm" type="button"
+      onclick="addDirFromBrowser()">＋ ce dossier</button>`;
+
+    let rows;
+    const entries = data.entries || [];
+    if (!entries.length){
+      rows = '<div class="entry"><span class="empty">Dossier vide</span></div>';
+    } else {
+      rows = entries.map((e) => {
+        const isVid = !e.isdir && VID_RE.test(e.path);
+        const isAud = !e.isdir && AUD_RE.test(e.path);
+        const ic = e.isdir ? '📁' : (isVid ? '🎬' : (isAud ? '🎵' : '📄'));
+        const safe = escapeAttr(e.path);
+        return `<div class="entry${e.isdir ? ' dir' : ''}" ${e.isdir ? `onclick="browse('${safe}')"` : ''}>
+          <span class="ic">${ic}</span>
+          <span class="nm" title="${escapeAttr(e.name)}">${escapeHtml(e.name)}</span>
+          <span class="sz">${!e.isdir && e.size_str ? escapeHtml(e.size_str) : ''}</span>
+          ${e.isdir ? '' : `<button class="btn btn-ghost btn-sm" type="button"
+             onclick="event.stopPropagation();pickFile('${safe}')">＋</button>`}
+        </div>`;
+      }).join('');
+    }
+    box.innerHTML = `<div class="crumbs">${crumbs}</div><div class="entries">${rows}</div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="crumbs"><span class="cur" style="color:var(--err)">Erreur : ${escapeHtml(e.message || e)}</span></div>`;
+  }
+}
+function pickFile(path){
+  const ctx = S.browserCtx;
+  if (!ctx) return;
+  path = String(path || '').trim();
+  if (!path) return;
+  const input = $(ctx + 'Path');
+  if (input) input.value = path;
+  pushPath(ctx, path);
+  renderChips(ctx);
+  closeBrowser();
+}
+function addDirFromBrowser(){
+  const ctx = S.browserCtx;
+  if (!ctx || !S.browserPath) return;
+  pushPath(ctx, S.browserPath);
+  const input = $(ctx + 'Path');
+  if (input) input.value = '';
+  renderChips(ctx);
+  closeBrowser();
+}
+
+/* ── Conversion ─────────────────────────────────────────────────────────── */
+function setConvTarget(t){
+  S.conv.target = t;
+  document.querySelectorAll('#convTargets .preset')
+    .forEach((e) => e.classList.toggle('sel', e.dataset.t === t));
+  invalidateScan('conv');
+}
+function setConvPreset(p){
+  S.conv.preset = p;
+  document.querySelectorAll('#convPresets .preset')
+    .forEach((e) => e.classList.toggle('sel', e.dataset.p === p));
+  invalidateScan('conv');
+}
+async function scanConvert(){
+  if (!S.conv.paths.length){ toast('Ajoutez au moins un fichier à convertir.', 'err'); return; }
+  setMsg('conv', '<div class="note info">🔍 <span class="nt">Analyse des fichiers…</span></div>');
+  try {
+    const data = await postJSON('/api/convert/scan', {
+      paths: S.conv.paths,
+      target: S.conv.target,
+      preset: S.conv.preset,
+      keep_4k: $('convKeep4k').checked,
+    });
+    S.conv.scan = data;
+    const fits = data.space_ok;
+    const margin = data.margin_ok;
+    const cls = fits ? (margin ? 'okn' : 'warn') : 'err';
+    const icon = fits ? (margin ? '✅' : '⚠️') : '❌';
+    const state = fits ? (margin ? 'ça passe' : 'marge disque faible') : 'espace disque insuffisant';
+    const n = (data.files || []).length;
+    setMsg('conv', `<div class="note ${cls}">${icon} <span class="nt">${n} fichier(s) · ${fmtDuration(data.total_duration)} de média → ~${fmtSize(data.need)} · disque : ${fmtSize(data.free)} libres · ${state}${estimateNote(data.estimate)}</span></div>`);
+    const go = $('convGo');
+    if (go) go.disabled = !(fits && n > 0);
+  } catch (e) {
+    setMsg('conv', errNote(e.message || e));
+  }
+}
+async function startConvert(){
+  if (!S.conv.paths.length) return;
+  if (!S.conv.scan || !S.conv.scan.space_ok){
+    await scanConvert();
+    if (!S.conv.scan || !S.conv.scan.space_ok) return;
+  }
+  const cfg = {
+    paths: S.conv.paths,
+    target: S.conv.target,
+    preset: S.conv.preset,
+    keep_4k: $('convKeep4k').checked,
+    force: $('convForce').checked,
+    jobs: clampInt($('convJobs').value, 1, 32, 4),
+  };
+  beginJob('conv', '/api/convert/start', cfg, S.conv.scan && S.conv.scan.estimate);
+}
+
+/* ── Sous-titrage ───────────────────────────────────────────────────────── */
+async function scanSubtitles(){
+  if (!S.sub.paths.length){ toast('Ajoutez au moins un fichier à transcrire.', 'err'); return; }
+  setMsg('sub', '<div class="note info">🔍 <span class="nt">Analyse…</span></div>');
+  try {
+    const data = await postJSON('/api/subtitles/scan', {
+      paths: S.sub.paths,
+      language: $('subLang').value,
+      model: $('subModel').value,
+      offset: parseFloat($('subOffset').value) || 0,
+      device: $('subDevice').value,
+    });
+    S.sub.scan = data;
+    const n = (data.files || []).length;
+    const todo = (data.files || []).filter((f) => !f.done).length;
+    setMsg('sub', `<div class="note okn">✅ <span class="nt">${n} fichier(s) · ${todo} à transcrire · ${fmtDuration(data.total_duration)} de média · modèle ${escapeHtml($('subModel').value)} · langue ${escapeHtml($('subLang').value)}${estimateNote(data.estimate)}</span></div>`);
+    const go = $('subGo');
+    if (go) go.disabled = false;
+  } catch (e) {
+    setMsg('sub', errNote(e.message || e));
+  }
+}
+async function startSubtitles(){
+  if (!S.sub.paths.length) return;
+  const cfg = {
+    paths: S.sub.paths,
+    language: $('subLang').value,
+    model: $('subModel').value,
+    device: $('subDevice').value,
+    offset: parseFloat($('subOffset').value) || 0,
+    max_chars: 42,
+    max_lines: 2,
+    mode: $('subMode').value,
+    words_per_cue: clampInt($('subWpc').value, 1, 10, 1),
+    music: $('subMusic').checked,
+    prompt: null,
+    force: $('subForce').checked,
+    jobs: 1,
+  };
+  beginJob('sub', '/api/subtitles/start', cfg, S.sub.scan && S.sub.scan.estimate);
+}
+
+/* ── Détection de plans (lot) ───────────────────────────────────────────── */
+function firstPath(ctx){
+  const input = $(ctx + 'Path');
+  const v = input ? (input.value || '').trim().replace(/^['"]|['"]$/g, '') : '';
+  return v || (S[ctx].paths[0] || '');
+}
+function sceneParams(){
+  return {
+    threshold: clampNum($('sceneThreshold').value, 1, 100, 30),
+    min_scene_len: clampNum($('sceneMinLen').value, 0.1, 600, 1.0),
+    downscale_factor: clampInt($('sceneDownscale').value, 1, 4, 2),
+  };
+}
+async function scanScenes(){
+  if (!S.scene.paths.length){ toast('Ajoutez au moins une vidéo.', 'err'); return; }
+  setMsg('scene', '<div class="note info">🔍 <span class="nt">Analyse des fichiers…</span></div>');
+  try {
+    const data = await postJSON('/api/scenes/scan',
+      Object.assign({ paths: S.scene.paths }, sceneParams()));
+    S.scene.scan = data;
+    setMsg('scene', `<div class="note okn">✅ <span class="nt">${data.count} vidéo(s) · ${fmtDuration(data.total_duration)} de média · traitement estimé ~${data.estimate.human}</span></div>`);
+    updateModuleAvailability();
+  } catch (e) {
+    setMsg('scene', errNote(e.message || e));
+  }
+}
+async function startSceneDetect(){
+  if (!S.scene.paths.length){
+    setMsg('scene', errNote('Sélectionnez d\'abord au moins une vidéo.'));
+    return;
+  }
+  S.scene.fps = clampNum($('sceneFps').value, 1, 120, 24);
+  const cfg = Object.assign({
+    paths: S.scene.paths,
+    video_path: S.scene.paths[0],
+  }, sceneParams());
+  beginJob('scene', '/api/scenes/detect', cfg, S.scene.scan && S.scene.scan.estimate);
+}
+
+/* ── Analyse audio (lot) ────────────────────────────────────────────────── */
+async function scanAudio(){
+  if (!S.audio.paths.length){ toast('Ajoutez au moins un fichier audio.', 'err'); return; }
+  setMsg('audio', '<div class="note info">🔍 <span class="nt">Analyse des fichiers…</span></div>');
+  try {
+    const data = await postJSON('/api/audio/scan', {
+      paths: S.audio.paths,
+      sample_rate: clampInt($('audioSr').value, 8000, 48000, 22050),
+    });
+    S.audio.scan = data;
+    setMsg('audio', `<div class="note okn">✅ <span class="nt">${data.count} fichier(s) · ${fmtDuration(data.total_duration)} de média · traitement estimé ~${data.estimate.human}</span></div>`);
+    updateModuleAvailability();
+  } catch (e) {
+    setMsg('audio', errNote(e.message || e));
+  }
+}
+async function startAudioAnalyze(){
+  if (!S.audio.paths.length){
+    setMsg('audio', errNote('Sélectionnez d\'abord un fichier audio.'));
+    return;
+  }
+  S.audio.fps = clampNum($('audioFps').value, 1, 120, 24);
+  const cfg = {
+    paths: S.audio.paths,
+    audio_path: S.audio.paths[0],
+    sample_rate: clampInt($('audioSr').value, 8000, 48000, 22050),
+  };
+  beginJob('audio', '/api/audio/analyze', cfg, S.audio.scan && S.audio.scan.estimate);
+}
+
+/* ── Cycle de vie d'un job ──────────────────────────────────────────────── */
+function setBusy(key, busy){
+  S[key].busy = busy;
+  if (!busy) S[key].cancelling = false;
+  const go = $(GO_BTN[key]);
+  if (go) go.disabled = busy;
+  const cancel = $(CANCEL_BTN[key]);
+  if (cancel){
+    cancel.classList.toggle('hidden', !busy);
+    cancel.disabled = false;
+    cancel.textContent = 'Arrêter';
+  }
+  if (!busy) updateModuleAvailability();
+}
+async function beginJob(key, url, cfg, estimate){
+  if (S[key].busy) return;
+  try {
+    const data = await postJSON(url, cfg);
+    if (!data || !data.id) throw new Error('Réponse invalide du serveur.');
+    S[key].jobId = data.id;
+    S[key].cancelling = false;
+    S[key].estimate = estimate || data.estimate || (S[key].scan && S[key].scan.estimate) || null;
+    setBusy(key, true);
+    clearResult(key);
+    setMsg(key, `<div class="note info">⏳ <span class="nt">${JOB_LABEL[key]} en cours…${estimateNote(S[key].estimate)}</span></div>`);
+    showBar(key);
+    pollJob(key);
+  } catch (e) {
+    setMsg(key, errNote(e.message || e));
+    toast(e.message || 'Échec du lancement', 'err');
+  }
+}
+function pollJob(key){
+  const jobId = S[key].jobId;
+  if (!jobId) return;
+  if (S[key].timer) clearInterval(S[key].timer);
+  const timer = setInterval(async () => {
+    if (S[key].jobId !== jobId){ clearInterval(timer); return; }
+    try {
+      const r = await fetch('/api/job/' + jobId, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const job = await r.json();
+      if (job.status === 'done'){
+        clearInterval(timer); S[key].timer = null;
+        handleJobDone(key, job);
+      } else if (job.status === 'error'){
+        clearInterval(timer); S[key].timer = null;
+        failJob(key, job.error || 'Erreur inconnue');
+      } else if (job.status === 'cancelled'){
+        clearInterval(timer); S[key].timer = null;
+        cancelledJob(key);
+      } else {
+        // queued / running / cancelling
+        updateJobProgress(key, job);
+      }
+    } catch (e) {
+      clearInterval(timer); S[key].timer = null;
+      failJob(key, 'Perte de connexion au serveur : ' + (e.message || e));
+    }
+  }, 400);
+  S[key].timer = timer;
+}
+function updateJobProgress(key, job){
+  const bar = $(BAR[key]);
+  const p = Math.max(0, Math.min(1, Number(job.progress) || 0));
+  if (bar){
+    bar.style.display = 'block';
+    bar.classList.remove('indeterminate');
+    bar.querySelector('i').style.width = Math.round(p * 100) + '%';
+  }
+  const logsEl = $(LOGS[key]);
+  if (logsEl && job.logs && job.logs.length){
+    const max = (key === 'conv' || key === 'sub') ? 24 : 16;
+    logsEl.innerHTML = job.logs.slice(-max).map((l) => escapeHtml(l)).join('\n');
+    logsEl.scrollTop = logsEl.scrollHeight;
+  }
+  const eta = job.eta || {};
+  const parts = [Math.round(p * 100) + ' %'];
+  if (job.total > 0){
+    const cur = Math.min((Number(job.done) || 0) + 1, job.total);
+    parts.push(`${cur}/${job.total} fichier(s)`);
+  }
+  if (eta.eta_human) parts.push(`reste ~${eta.eta_human}`);
+  else if (S[key].estimate && S[key].estimate.human) parts.push(`estimé ~${S[key].estimate.human}`);
+  if (eta.elapsed) parts.push(`${fmtDuration(eta.elapsed)} écoulées`);
+
+  if (job.status === 'cancelling'){
+    setMsg(key, `<div class="note warn">🛑 <span class="nt">Arrêt en cours… ${parts.join(' · ')}</span></div>`);
+  } else {
+    setMsg(key, `<div class="note info">⏳ <span class="nt">${JOB_LABEL[key]} — ${parts.join(' · ')}</span></div>`);
+  }
+}
+function handleJobDone(key, job){
+  setBusy(key, false);
+  hideBar(key);
+  const r = job.result || {};
+  if (key === 'conv'){
+    const st = r.stats || { ok:0, skip:0, fail:0 };
+    $('convOk').textContent = st.ok;
+    $('convSkip').textContent = st.skip;
+    $('convFail').textContent = st.fail;
+    $('convResult').classList.remove('hidden');
+    setMsg('conv', `<div class="note okn">✅ <span class="nt">Conversion terminée · ${st.ok} convertis, ${st.skip} déjà OK, ${st.fail} échec(s)</span></div>`);
+    toast('Conversion terminée', 'ok');
+  } else if (key === 'sub'){
+    const st = r.stats || { ok:0, skip:0, fail:0 };
+    $('subOk').textContent = st.ok;
+    $('subSkip').textContent = st.skip;
+    $('subFail').textContent = st.fail;
+    $('subResult').classList.remove('hidden');
+    setMsg('sub', `<div class="note okn">✅ <span class="nt">Transcription terminée · ${st.ok} transcrits, ${st.skip} déjà OK, ${st.fail} échec(s)</span></div>`);
+    toast('Transcription terminée', 'ok');
+  } else if (key === 'scene'){
+    renderSceneResults(r);
+    toast(`${r.total_cuts || 0} plans détectés`, 'ok');
+  } else if (key === 'audio'){
+    renderAudioResults(r);
+    toast(`${r.total_beats || 0} beats analysés`, 'ok');
+  }
+}
+function failJob(key, message){
+  setBusy(key, false);
+  hideBar(key);
+  setMsg(key, errNote(message));
+  toast(message, 'err');
+}
+function cancelledJob(key){
+  setBusy(key, false);
+  hideBar(key);
+  setMsg(key, '<div class="note warn">⚠️ <span class="nt">Traitement interrompu — processus et enfants arrêtés.</span></div>');
+  toast('Traitement interrompu', 'info');
+}
+function cancelJob(key){
+  const id = S[key].jobId;
+  if (!id || S[key].cancelling) return;
+  S[key].cancelling = true;
+  setMsg(key, '<div class="note warn">🛑 <span class="nt">Arrêt en cours… (processus liés interrompus)</span></div>');
+  const btn = $(CANCEL_BTN[key]);
+  if (btn){ btn.disabled = true; btn.textContent = 'Arrêt…'; }
+  fetch('/api/job/' + id + '/cancel', { method: 'POST' }).catch(() => {});
+  // Le serveur confirme « cancelled » via le polling. Si cela tarde, on
+  // réautorise un nouvel essai plutôt que de mentir sur l'état réel.
+  setTimeout(() => {
+    if (S[key].cancelling && S[key].busy){
+      if (btn){ btn.disabled = false; btn.textContent = 'Arrêter'; }
+      toast('L\'arrêt prend du temps — vous pouvez réessayer', 'info');
+    }
+  }, 15000);
+}
+
+/* ── Résultats ──────────────────────────────────────────────────────────── */
+function sceneFilesOf(result){
+  let files = (result && result.files) || [];
+  if (!files.length && result && result.cuts){
+    files = [{
+      name: result.video || nameFromPath(firstPath('scene')),
+      path: firstPath('scene'),
+      cuts: result.cuts,
+      fps: result.fps,
+      duration: result.duration,
+      total_cuts: result.cuts.length,
+    }];
+  }
+  return files;
+}
+function renderSceneResults(result){
+  S.scene.result = result;
+  const files = sceneFilesOf(result);
+  S.scene.files = files;
+  const totalCuts = result.total_cuts != null ? result.total_cuts
+    : files.reduce((a, f) => a + (f.total_cuts != null ? f.total_cuts : (f.cuts || []).length), 0);
+  const totalDur = result.duration || files.reduce((a, f) => a + (Number(f.duration) || 0), 0);
+  $('sceneStats').innerHTML = `
+    <div class="stat"><div class="num" style="color:var(--scene)">${totalCuts}</div><div class="lbl">Plans</div></div>
+    <div class="stat"><div class="num">${files.length}</div><div class="lbl">Fichier(s)</div></div>
+    <div class="stat"><div class="num">${fmtDuration(totalDur)}</div><div class="lbl">Durée analysée</div></div>
+    <div class="stat"><div class="num">${result.elapsed || 0}s</div><div class="lbl">Traitement</div></div>`;
+  const pick = $('sceneFilePick');
+  if (pick){
+    pick.innerHTML = files.map((f, i) => {
+      const n = f.total_cuts != null ? f.total_cuts : (f.cuts || []).length;
+      return `<option value="${i}">${escapeHtml(f.name || nameFromPath(f.path))} — ${n} plans</option>`;
+    }).join('');
+  }
+  const pickWrap = $('scenePickWrap');
+  if (pickWrap) pickWrap.classList.toggle('hidden', files.length < 2);
+  const zipWrap = $('sceneZipWrap');
+  if (zipWrap) zipWrap.classList.toggle('hidden', files.length < 2);
+  selectSceneFile(0);
+  $('sceneResult').classList.remove('hidden');
+  setMsg('scene', `<div class="note okn">✅ <span class="nt">${totalCuts} plans détectés sur ${files.length} fichier(s) en ${result.elapsed || 0}s</span></div>`);
+}
+function selectSceneFile(index){
+  const files = S.scene.files || [];
+  index = clampInt(index, 0, Math.max(0, files.length - 1), 0);
+  S.scene.fileIndex = index;
+  const pick = $('sceneFilePick');
+  if (pick) pick.value = String(index);
+  const cuts = (files[index] && files[index].cuts) || [];
+  $('sceneTbody').innerHTML = cuts.map((c, i) => `
+    <tr><td>${i + 1}</td><td>${escapeHtml(c.start_tc)}</td><td>${escapeHtml(c.end_tc)}</td>
+    <td>${fmtDuration(c.duration)}</td><td>${Number(c.start).toFixed(3)}</td></tr>`).join('');
+}
+
+function audioFilesOf(result){
+  let files = (result && result.files) || [];
+  if (!files.length && result && result.beats){
+    files = [{
+      name: result.audio || nameFromPath(firstPath('audio')),
+      path: firstPath('audio'),
+      beats: result.beats,
+      tempo: result.tempo,
+      ranks: result.ranks,
+      total_beats: result.beats.length,
+    }];
+  }
+  return files;
+}
+function renderAudioResults(result){
+  S.audio.result = result;
+  const files = audioFilesOf(result);
+  S.audio.files = files;
+  const ranks = { 1:0, 2:0, 3:0 };
+  files.forEach((f) => {
+    const r = f.ranks || {};
+    ranks[1] += Number(r[1] || 0);
+    ranks[2] += Number(r[2] || 0);
+    ranks[3] += Number(r[3] || 0);
+  });
+  const totalBeats = result.total_beats != null ? result.total_beats
+    : files.reduce((a, f) => a + (f.total_beats != null ? f.total_beats : (f.beats || []).length), 0);
+  $('audioStats').innerHTML = `
+    <div class="stat"><div class="num rank-1">${ranks[1]}</div><div class="lbl">Rang 1 — forts</div></div>
+    <div class="stat"><div class="num rank-2">${ranks[2]}</div><div class="lbl">Rang 2 — moyens</div></div>
+    <div class="stat"><div class="num rank-3">${ranks[3]}</div><div class="lbl">Rang 3 — micro</div></div>
+    <div class="stat"><div class="num">${totalBeats}</div><div class="lbl">Beats · ${files.length} fichier(s)</div></div>`;
+  const pick = $('audioFilePick');
+  if (pick){
+    pick.innerHTML = files.map((f, i) => {
+      const n = f.total_beats != null ? f.total_beats : (f.beats || []).length;
+      return `<option value="${i}">${escapeHtml(f.name || nameFromPath(f.path))} — ${n} beats</option>`;
+    }).join('');
+  }
+  const pickWrap = $('audioPickWrap');
+  if (pickWrap) pickWrap.classList.toggle('hidden', files.length < 2);
+  const zipWrap = $('audioZipWrap');
+  if (zipWrap) zipWrap.classList.toggle('hidden', files.length < 2);
+  selectAudioFile(0);
+  $('audioResult').classList.remove('hidden');
+  const tempo = files.length === 1 && files[0].tempo ? ` · ${files[0].tempo} BPM` : '';
+  setMsg('audio', `<div class="note okn">✅ <span class="nt">${totalBeats} beats · ${files.length} fichier(s)${tempo} · R1 ${ranks[1]} / R2 ${ranks[2]} / R3 ${ranks[3]} · ${result.elapsed || 0}s</span></div>`);
+}
+function selectAudioFile(index){
+  const files = S.audio.files || [];
+  index = clampInt(index, 0, Math.max(0, files.length - 1), 0);
+  S.audio.fileIndex = index;
+  const pick = $('audioFilePick');
+  if (pick) pick.value = String(index);
+  const beats = (files[index] && files[index].beats) || [];
+  const max = 300;
+  const shown = beats.slice(0, max);
+  let rows = shown.map((b, i) => `
+    <tr class="r${b.rank}"><td>${i + 1}</td>
+    <td class="rank-${b.rank}">${escapeHtml(b.label)}</td>
+    <td>${Number(b.time).toFixed(3)}</td>
+    <td>${Number(b.energy).toFixed(4)}</td>
+    <td class="rank-${b.rank}">${b.rank}</td></tr>`).join('');
+  if (beats.length > max){
+    rows += `<tr><td colspan="5" style="text-align:center;color:var(--mut)">… et ${beats.length - max} beats supplémentaires (export CSV pour la liste complète)</td></tr>`;
+  }
+  $('audioTbody').innerHTML = rows;
+}
+
+/* ── Exports ────────────────────────────────────────────────────────────── */
+async function exportScenes(fmt){
+  if (!S.scene.jobId){ toast('Lancez d\'abord une détection.', 'err'); return; }
+  const body = { job_id: S.scene.jobId, fmt, fps: S.scene.fps };
+  if ((S.scene.files || []).length > 1) body.file_index = S.scene.fileIndex;
+  try {
+    const out = await postBinary('/api/scenes/export', body);
+    downloadBlob(out.blob, out.filename);
+    toast('Export ' + fmt.toUpperCase() + ' téléchargé', 'ok');
+  } catch (e) {
+    setMsg('scene', errNote(e.message || e));
+  }
+}
+async function exportScenesZip(){
+  if (!S.scene.jobId){ toast('Lancez d\'abord une détection.', 'err'); return; }
+  const fmt = ($('sceneZipFmt') || {}).value || 'xml';
+  try {
+    const out = await postBinary('/api/scenes/export', {
+      job_id: S.scene.jobId, fmt, fps: S.scene.fps,
+    });
+    downloadBlob(out.blob, out.filename);
+    toast('Archive ZIP téléchargée', 'ok');
+  } catch (e) {
+    setMsg('scene', errNote(e.message || e));
+  }
+}
+/* Rangs cochés (1 = impact fort, 2 = intermédiaire, 3 = micro-variations). */
+function selectedRanks(){
+  const ranks = [];
+  if ($('rank1')?.checked) ranks.push(1);
+  if ($('rank2')?.checked) ranks.push(2);
+  if ($('rank3')?.checked) ranks.push(3);
+  return ranks;
+}
+
+function openDavinciHelp(){
+  const help = document.querySelector('.davinci-help');
+  if (help) help.open = true;
+}
+
+async function exportBeats(fmt){
+  if (!S.audio.jobId){ toast('Lancez d\'abord une analyse audio.', 'err'); return; }
+  const ranks = selectedRanks();
+  if (ranks.length === 0) { toast('Sélectionnez au moins un rang.', 'err'); return; }
+
+  const body = { job_id: S.audio.jobId, fmt, fps: S.audio.fps, ranks };
+  if ((S.audio.files || []).length > 1) body.file_index = S.audio.fileIndex;
+  try {
+    const out = await postBinary('/api/audio/export', body);
+    downloadBlob(out.blob, out.filename);
+    toast('Export ' + fmt.toUpperCase() + ' téléchargé', 'ok');
+    if (fmt === 'davinci_script') openDavinciHelp();
+  } catch (e) {
+    setMsg('audio', errNote(e.message || e));
+  }
+}
+
+/* Installe le script dans ~/.local/share/DaVinciResolve/Fusion/Scripts/Utility/.
+   Il apparaît ensuite dans Workspace → Scripts (redémarrage la 1re fois). */
+async function installDavinci(){
+  if (!S.audio.jobId){ toast('Lancez d\'abord une analyse audio.', 'err'); return; }
+  const ranks = selectedRanks();
+  if (ranks.length === 0) { toast('Sélectionnez au moins un rang.', 'err'); return; }
+
+  const body = { job_id: S.audio.jobId, fps: S.audio.fps, ranks };
+  if ((S.audio.files || []).length > 1) body.file_index = S.audio.fileIndex;
+  try {
+    const res = await fetch('/api/audio/davinci/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const info = await res.json();
+    let etape;
+    if (info.restart_needed) {
+      etape = 'Redémarrez DaVinci Resolve (première installation), puis Workspace → Scripts → ' + info.menu_label;
+    } else if (!info.resolve_running) {
+      etape = 'Ouvrez DaVinci Resolve, puis Workspace → Scripts → ' + info.menu_label;
+    } else {
+      etape = 'Dans Resolve : Workspace → Scripts → ' + info.menu_label;
+    }
+    toast(info.markers + ' marqueurs prêts. ' + etape, 'ok');
+    setMsg('audio', '✅ Script installé (' + info.markers + ' marqueurs) : ' + info.path +
+      '\n→ ' + etape);
+    openDavinciHelp();
+  } catch (e) {
+    setMsg('audio', errNote('Installation DaVinci impossible : ' + (e.message || e)));
+  }
+}
+
+async function exportBeatsZip(){
+  if (!S.audio.jobId){ toast('Lancez d\'abord une analyse audio.', 'err'); return; }
+  const fmt = ($('audioZipFmt') || {}).value || 'xml';
+  try {
+    const out = await postBinary('/api/audio/export', {
+      job_id: S.audio.jobId, fmt, fps: S.audio.fps,
+    });
+    downloadBlob(out.blob, out.filename);
+    toast('Archive ZIP téléchargée', 'ok');
+  } catch (e) {
+    setMsg('audio', errNote(e.message || e));
+  }
+}
+
+/* ── Exposition globale (handlers inline) ───────────────────────────────── */
+Object.assign(window, {
+  switchTab, addPath, delPath,
+  browseFiles, browseFolder, openBrowser, closeBrowser, browse,
+  pickFile, addDirFromBrowser,
+  setConvTarget, setConvPreset, scanConvert, startConvert,
+  scanSubtitles, startSubtitles,
+  scanScenes, startSceneDetect, selectSceneFile,
+  scanAudio, startAudioAnalyze, selectAudioFile,
+  cancelJob, exportScenes, exportScenesZip, exportBeats, exportBeatsZip,
+  installDavinci, openDavinciHelp,
+});
+</script>
+</body>
+</html>
