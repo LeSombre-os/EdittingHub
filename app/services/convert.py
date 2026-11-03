@@ -131,7 +131,7 @@ class ConvertService:
 
         try:
             proc = subprocess.Popen(
-                cmd,
+                procs.nice_cmd(cmd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

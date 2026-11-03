@@ -69,6 +69,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;
 .tab[data-tab="scenes"].active{background:linear-gradient(135deg,var(--scene),var(--scene2))}
 .tab[data-tab="audio"].active{background:linear-gradient(135deg,var(--audio),var(--audio2))}
 .tab[data-tab="rhythm"].active{background:linear-gradient(135deg,var(--rhy),var(--rhy2))}
+.tab[data-tab="trim"].active{background:linear-gradient(135deg,#ff965a,#ff6b35)}
+.tab[data-tab="scriptcheck"].active{background:linear-gradient(135deg,#3ecf8e,#52d68e)}
 
 /* ── Panels ─────────────────────────────────────────────── */
 .panel{display:none;animation:fade .22s ease}
@@ -86,7 +88,9 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;
 .card[data-mod="subtitles"] h2::before{background:linear-gradient(var(--sub),var(--sub2))}
 .card[data-mod="scenes"] h2::before{background:linear-gradient(var(--scene),var(--scene2))}
 .card[data-mod="audio"] h2::before{background:linear-gradient(var(--audio),var(--audio2))}
-
+.card[data-mod="rhythm"] h2::before{background:linear-gradient(var(--rhy),var(--rhy2))}
+.card[data-mod="trim"] h2::before{background:linear-gradient(#ff965a,#ff6b35)}
+.card[data-mod="scriptcheck"] h2::before{background:linear-gradient(#3ecf8e,#52d68e)}
 /* ── Form ───────────────────────────────────────────────── */
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
 .inp-group{flex:1;min-width:170px}
@@ -180,6 +184,49 @@ input[type=number]{max-width:110px}
   background:linear-gradient(90deg,var(--ok),var(--acc));transition:width .35s ease}
 .bar.indeterminate i{width:35%;animation:slide 1.3s ease-in-out infinite}
 @keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+
+/* ── Barre de tâches globale (visible sur tous les onglets) ─ */
+.taskdock{position:sticky;top:72px;z-index:45;margin:0 0 18px;
+  background:rgba(19,23,32,.96);backdrop-filter:blur(14px);
+  border:1px solid var(--line2);border-radius:var(--r);padding:11px 14px;
+  box-shadow:0 12px 30px rgba(0,0,0,.45);animation:fade .2s ease}
+.taskdock.hidden{display:none}
+.taskdock-head{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);
+  text-transform:uppercase;letter-spacing:.8px;font-weight:700}
+.taskdock-head .sysline{display:flex;gap:10px;flex-wrap:wrap;font-weight:600;
+  letter-spacing:0;text-transform:none;font-size:11.5px}
+.taskdock-head .sysline b{color:var(--txt);font-variant-numeric:tabular-nums}
+.taskdock-head .sysline .warn{color:var(--warn)} .taskdock-head .sysline .ok{color:var(--ok)}
+.task{display:block;padding:9px 0 2px;border-top:1px solid var(--line)}
+.task:first-of-type{border-top:0}
+.task-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px}
+.task-name{font-weight:700}
+.task-file{color:var(--mut);max-width:34ch;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-size:12px}
+.task-pct{font-variant-numeric:tabular-nums;font-weight:750;margin-left:auto}
+.task-eta{color:var(--mut);font-variant-numeric:tabular-nums}
+.task-cancel{border:1px solid rgba(255,107,107,.35);background:rgba(255,107,107,.1);
+  color:#ffb3b3;border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;
+  font-family:inherit;font-weight:600}
+.task-cancel:hover{background:rgba(255,107,107,.2)}
+.task-bar{height:6px;background:var(--card2);border-radius:999px;overflow:hidden;margin:7px 0 4px}
+.task-bar i{display:block;height:100%;border-radius:999px;width:0;
+  background:linear-gradient(90deg,var(--ok),var(--acc));transition:width .3s ease}
+.task-bar.waiting i{width:35%!important;animation:slide 1.3s ease-in-out infinite}
+.task-label{font-size:11.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.hwchip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;
+  font-size:10.5px;font-weight:700;letter-spacing:.4px;border:1px solid transparent;
+  white-space:nowrap}
+.hwchip.cpu{background:rgba(108,140,255,.12);border-color:rgba(108,140,255,.35);color:#b9c8ff}
+.hwchip.gpu{background:rgba(255,178,36,.12);border-color:rgba(255,178,36,.35);color:#ffd98a}
+.hwchip.both{background:linear-gradient(90deg,rgba(108,140,255,.14),rgba(255,178,36,.14));
+  border-color:rgba(157,108,255,.4);color:#d8c3ff}
+/* Bandeau matériel dans chaque page */
+.hwbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:-6px 0 14px;
+  font-size:11.5px;color:var(--mut)}
+.hwbar .hwchip{font-size:10px}
 
 /* ── Stats ──────────────────────────────────────────────── */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
@@ -278,7 +325,20 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
   <button class="tab" role="tab" aria-selected="false" data-tab="audio"
           aria-controls="panel-audio" id="tabbtn-audio">🎵 Beats Audio</button>
   <button class="tab" role="tab" aria-selected="false" data-tab="rhythm"
-          aria-controls="panel-rhythm" id="tabbtn-rhythm">🥁 Montage au rythme</button>
+          aria-controls="panel-rhythm" id="tabbtn-rhythm">🥁 AutoMontage</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="trim"
+          aria-controls="panel-trim" id="tabbtn-trim">✂️ Coupe blancs</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="scriptcheck"
+          aria-controls="panel-scriptcheck" id="tabbtn-scriptcheck">📜 ScriptCheck</button>
+</div>
+
+<!-- ── Suivi global des tâches (visible sur tous les onglets) ─────────── -->
+<div class="taskdock hidden" id="taskDock" aria-live="polite" aria-label="Travaux en cours">
+  <div class="taskdock-head">
+    <span id="dockTitle">⚙️ Travail en cours</span>
+    <span class="sysline" id="sysLine"></span>
+  </div>
+  <div id="taskList"></div>
 </div>
 
 <!-- ═══ PANNEAU 1 : CONVERSION ═══════════════════════════ -->
@@ -602,7 +662,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
         <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeats('csv')">📥 CSV</button>
         <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeats('fcpxml')">🎬 FCPXML</button>
         <span style="display:inline-flex;gap:4px;align-items:center;margin-left:8px">
-          <label style="font-size:11px;color:var(--muted)">Rangs :</label>
+          <label style="font-size:11px;color:var(--mut)">Rangs :</label>
           <label style="display:inline-flex;align-items:center;gap:2px;font-size:11px">
             <input type="checkbox" id="rank1" checked> 1
           </label>
@@ -623,7 +683,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
           <button class="btn btn-ghost btn-sm" type="button" onclick="exportBeatsZip()">📦 Tout (ZIP)</button>
         </span>
       </div>
-      <details class="davinci-help" style="margin-top:10px;font-size:12px;color:var(--muted)">
+      <details class="davinci-help" style="margin-top:10px;font-size:12px;color:var(--mut)">
         <summary style="cursor:pointer;font-weight:600">📖 Mettre les marqueurs dans DaVinci Resolve — mode d'emploi</summary>
         <div style="padding:12px;background:var(--card2);border:1px solid var(--line);border-radius:8px;margin-top:8px;line-height:1.6">
           <p style="margin:0 0 10px"><b>Méthode 1 — la plus simple (recommandée)</b></p>
@@ -762,7 +822,7 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
         <button class="btn btn-ghost btn-sm" type="button" onclick="exportRhythm('edl')">📥 EDL</button>
         <button class="btn btn-ghost btn-sm" type="button" onclick="exportRhythm('csv')">📥 CSV</button>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:10px 0 0">
+      <p style="font-size:12px;color:var(--mut);margin:10px 0 0">
         Dans Resolve : <b>Fichier → Importer → Timeline…</b>, choisissez le <code>.fcpxml</code>.
         La musique arrive sur une piste liée (décochez la case ci-dessus si votre version
         de Resolve refuse la piste liée : les coupes restent identiques).
@@ -772,7 +832,106 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
   </div>
 </section>
 
-<footer>
+<section class="panel" id="panel-trim" role="tabpanel" aria-labelledby="tabbtn-trim">
+  <div class="card" data-mod="trim">
+    <h2>Fichier à couper (audio ou vidéo)</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="trimPath">Rush</label>
+        <input id="trimPath" type="text" placeholder="/media/…/rush.mp4"
+               autocomplete="off" spellcheck="false" oninput="updateModuleAvailability()">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('trim')"
+              title="Ouvre l'explorateur de fichiers du système (zenity)">📂 Parcourir</button>
+    </div>
+    <div class="file-browser" id="browser-trim" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="trim">
+    <h2>Réglages</h2>
+    <div class="fields">
+      <div class="inp-group">
+        <label class="label" for="trimMinSilence">Silence min à couper (s)</label>
+        <input id="trimMinSilence" type="number" min="0.1" max="5" step="0.05" value="0.35">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="trimKeepSilence">Garder aux bords (s)</label>
+        <input id="trimKeepSilence" type="number" min="0" max="0.5" step="0.01" value="0.10">
+      </div>
+      <div class="inp-group">
+        <label class="label" for="trimTopDb">Seuil de silence (dB)</label>
+        <input id="trimTopDb" type="number" min="10" max="60" step="1" value="35">
+      </div>
+    </div>
+    <div class="option">
+      <input type="checkbox" id="trimFillers" checked>
+      <label for="trimFillers">Détecter les hésitations (« euh… ») via Whisper</label>
+    </div>
+    <div class="note info" style="margin-top:12px">
+      <span class="nt">
+        Produit un nouveau fichier à côté du rush (<code>_trimmed.mp4</code> ou <code>.wav</code>)
+        sans les blancs ni les « euh ». Idéal pour des podcasts et des rushes parlés.
+        Sur GPU si le venv ROCm est présent, sinon sur CPU (quelques minutes).
+      </span>
+    </div>
+  </div>
+
+  <div class="card" data-mod="trim">
+    <h2>Exécution</h2>
+    <div class="btn-flex">
+      <button class="btn btn-primary" type="button" id="trimGo" onclick="startTrim()" disabled>✂️ Couper</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="trimCancel" onclick="cancelJob('trim')">Arrêter</button>
+    </div>
+    <div class="bar" id="trimBar" style="display:none"><i></i></div>
+    <div class="logs" id="trimLogs"></div>
+    <div class="msg" id="trimMsg"></div>
+    <div class="result" id="trimResult" style="display:none;margin-top:16px">
+      <div class="stat-line">Résultat :</div>
+      <div id="trimOut"></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="panel-scriptcheck" role="tabpanel" aria-labelledby="tabbtn-scriptcheck">
+  <div class="card" data-mod="scriptcheck">
+    <h2>Fichier audio / vidéo</h2>
+    <div class="row">
+      <div class="inp-group">
+        <label class="label" for="scPath">Rush lu à l'écran</label>
+        <input id="scPath" type="text" placeholder="/media/…/rush.mp4"
+               autocomplete="off" spellcheck="false" oninput="updateModuleAvailability()">
+      </div>
+      <button class="btn btn-ghost" type="button" onclick="browseFiles('sc')"
+              title="Sélecteur natif">📂 Parcourir</button>
+    </div>
+    <div class="file-browser" id="browser-sc" style="display:none"></div>
+  </div>
+
+  <div class="card" data-mod="scriptcheck">
+    <h2>Script de référence</h2>
+    <div class="inp-group">
+      <label class="label" for="scScript">Colle le texte attendu (prononciation la plus fidèle possible)</label>
+      <textarea id="scScript" rows="8" placeholder="Bonjour, je suis..."
+                oninput="updateModuleAvailability()"
+                style="width:100%;font:inherit;border-radius:12px;padding:10px;background:var(--card2);color:var(--txt);border:1px solid var(--line)"></textarea>
+    </div>
+  </div>
+
+  <div class="card" data-mod="scriptcheck">
+    <h2>Exécution</h2>
+    <div class="btn-flex">
+      <button class="btn btn-primary" type="button" id="scGo" onclick="startScriptCheck()" disabled>📜 Vérifier</button>
+      <button class="btn btn-danger btn-sm hidden" type="button" id="scCancel" onclick="cancelJob('sc')">Arrêter</button>
+    </div>
+    <div class="bar" id="scBar" style="display:none"><i></i></div>
+    <div class="logs" id="scLogs"></div>
+    <div class="msg" id="scMsg"></div>
+    <div class="result" id="scResult" style="display:none;margin-top:16px">
+      <div id="scOut"></div>
+    </div>
+  </div>
+</section>
+
   <span>EdittingHub v1.4 · 100 % local · Zorin OS</span>
   <span class="tool-status" id="toolStatus"></span>
   <span class="system-status" id="systemStatus"></span>
@@ -797,14 +956,14 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
 
 const $  = (id) => document.getElementById(id);
 
-const ALL_CTX   = ['conv', 'sub', 'scene', 'audio', 'rhythm'];
-const MSG       = { conv:'convMsg', sub:'subMsg', scene:'sceneMsg', audio:'audioMsg', rhythm:'rhythmMsg' };
-const LOGS      = { conv:'convLogs', sub:'subLogs', scene:'sceneLogs', audio:'audioLogs', rhythm:'rhythmLogs' };
-const GO_BTN    = { conv:'convGo', sub:'subGo', scene:'sceneGo', audio:'audioGo', rhythm:'rhythmGo' };
-const CANCEL_BTN= { conv:'convCancel', sub:'subCancel', scene:'sceneCancel', audio:'audioCancel', rhythm:'rhythmCancel' };
-const BAR       = { conv:'convBar', sub:'subBar', scene:'sceneBar', audio:'audioBar', rhythm:'rhythmBar' };
-const RESULT    = { conv:'convResult', sub:'subResult', scene:'sceneResult', audio:'audioResult', rhythm:'rhythmResult' };
-const JOB_LABEL = { conv:'Conversion', sub:'Transcription', scene:'Détection de plans', audio:'Analyse audio', rhythm:'Montage au rythme' };
+const ALL_CTX   = ['conv', 'sub', 'scene', 'audio', 'rhythm', 'trim', 'sc'];
+const MSG       = { conv:'convMsg', sub:'subMsg', scene:'sceneMsg', audio:'audioMsg', rhythm:'rhythmMsg', trim:'trimMsg', sc:'scMsg' };
+const LOGS      = { conv:'convLogs', sub:'subLogs', scene:'sceneLogs', audio:'audioLogs', rhythm:'rhythmLogs', trim:'trimLogs', sc:'scLogs' };
+const GO_BTN    = { conv:'convGo', sub:'subGo', scene:'sceneGo', audio:'audioGo', rhythm:'rhythmGo', trim:'trimGo', sc:'scGo' };
+const CANCEL_BTN= { conv:'convCancel', sub:'subCancel', scene:'sceneCancel', audio:'audioCancel', rhythm:'rhythmCancel', trim:'trimCancel', sc:'scCancel' };
+const BAR       = { conv:'convBar', sub:'subBar', scene:'sceneBar', audio:'audioBar', rhythm:'rhythmBar', trim:'trimBar', sc:'scBar' };
+const RESULT    = { conv:'convResult', sub:'subResult', scene:'sceneResult', audio:'audioResult', rhythm:'rhythmResult', trim:'trimResult', sc:'scResult' };
+const JOB_LABEL = { conv:'Conversion', sub:'Transcription', scene:'Détection de plans', audio:'Analyse audio', rhythm:'AutoMontage', trim:'Coupe blancs', sc:'Vérification script' };
 
 /* Filtres du sélecteur natif : « Libellé|motif motif;Libellé2|motif » */
 const FILTERS = {
@@ -829,6 +988,8 @@ const S = {
            timer:null, busy:false, scan:null, estimate:null, cancelling:false },
   rhythm:{ jobId:null, result:null, timer:null, busy:false, scan:null,
            estimate:null, cancelling:false, pickTarget:'video' },
+  trim:  { jobId:null, timer:null, busy:false, estimate:null, cancelling:false, paths:[] },
+  sc:    { jobId:null, timer:null, busy:false, estimate:null, cancelling:false, paths:[] },
   config: null,
   browserCtx: null,
   browserPath: '',
@@ -982,13 +1143,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Entrée = ajouter le chemin saisi
-  ALL_CTX.forEach((ctx) => {
-    const inp = $(ctx + 'Path');
-    if (inp) inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter'){ e.preventDefault(); addPath(ctx); }
-    });
-  });
+  // Suivi global : ce qui tourne **quel que soit l'onglet** ouvert
+  setInterval(pollDock, 900);
+  setTimeout(pollDock, 300);
 });
 
 async function loadConfig(){
@@ -1016,28 +1173,55 @@ function renderToolStatus(t){
   ).join('');
 }
 
-//  System status rendering
+//  System status rendering (nouvelle forme /api/system)
 function renderSystemStatus(sys){
-  const el = $('systemStatus');
+  const el = $('sysLine');
   if (!el) return;
   const parts = [];
-  if (sys.cpu_load) {
-    parts.push(`CPU: ${sys.cpu_load['1min']} (1min)`);
+  if (sys.cpu){
+    parts.push(`🖥️ CPU ${ (sys.cpu.percent==null?'…':sys.cpu.percent + '%') } / budget ${sys.cpu.budget} th`);
   }
-  if (sys.memory) {
-    parts.push(`RAM: ${sys.memory.percent}%`);
+  if (sys.memory){
+    parts.push(`🧠 RAM ${sys.memory.percent}%`);
   }
-  if (sys.swap) {
-    parts.push(`SWAP: ${sys.swap.percent}%`);
+  if (sys.gpu && sys.gpu.length){
+    const g = sys.gpu[0];
+    parts.push(`🎮 GPU ${g.busy}% (VRAM ${g.vram_percent}% )`);
   }
-  if (sys.gpu && sys.gpu.length) {
-    const gpu = sys.gpu[0]; // Assume first GPU
-    parts.push(`GPU: ${gpu.gpu_util}% (mem: ${gpu.mem_util}%)`);
+  if (sys.whisper_gpu === true) parts.push('GPU audio (sous-titrage) OK');
+  if (sys.nice != null) parts.push(`nice ${sys.nice}`);
+  el.innerHTML = parts.map(p => `<b>${escapeHtml(p)}</b>`).join(' · ');
+  // Indications matériel par module (à placer dans les pages concernées)
+  updateHwBars(sys);
+
+  // Header status text
+  const txt = $('statusText');
+  if (txt && sys.cpu){
+    const load = sys.cpu.load_percent;
+    txt.textContent = `CPU ${sys.cpu.percent==null?'…':sys.cpu.percent+'%'} · GPU ${sys.gpu && sys.gpu.length ? sys.gpu[0].busy+'%' : '–'} · RAM ${sys.memory ? sys.memory.percent+'%' : '–'}`;
   }
-  el.innerHTML = parts.map(p => `<span class="y">${escapeHtml(p)}</span>`).join(' | ');
-  if (parts.length === 0) {
-    el.innerHTML = '<span class="n">Données système indisponibles</span>';
-  }
+}
+
+function updateHwBars(sys){
+  // Remplit les petits bandeaux « matériel utilisé » de chaque onglet,
+  // pour savoir ce que lancer en parallèle.
+  const subHw = sys.whisper_gpu ? 'gpu' : 'cpu';
+  const badge = (hw, text) => `<span class="hwchip ${hw}">${text}</span>`;
+  const htmlByMod = {
+    'convert': badge(sys.gpu && sys.gpu.length ? 'both' : 'cpu',
+       (sys.gpu && sys.gpu.length ? '🖥️ CPU + GPU' : '🖥️ CPU') + ' · encodage DNxHR'),
+    'subtitles': badge(subHw, (subHw === 'gpu' ? '🎮 GPU (torch ROCm)' : '🖥️ CPU (faster-whisper int8)') + ' · modèles'),
+    'scenes': badge('cpu', '🖥️ CPU (OpenCV · 1 cœur)'),
+    'audio': badge('cpu', '🖥️ CPU (librosa · monothreadé)'),
+    'rhythm': badge('cpu', '🖥️ CPU (beats + plan)'),
+    'trim': badge('cpu', '🖥️ CPU (silences) + GPU/CPU pour Whisper'),
+    'sc': badge('cpu', '🖥️ CPU (ASR + alignement)'),
+  };
+  Object.keys(htmlByMod).forEach((m) => {
+    document.querySelectorAll('.hwbar[data-hwmod="' + m + '"]').forEach((el) => {
+      el.innerHTML = 'Matériel utilisé par ce module : ' + htmlByMod[m];
+    });
+  });
 }
 async function checkServer(){
   try {
@@ -1090,7 +1274,14 @@ function invalidateScan(ctx){
 function pushPath(ctx, path){
   path = String(path || '').trim();
   if (!path) return;
+  if (!S[ctx].paths) S[ctx].paths = [];
   if (!S[ctx].paths.includes(path)) S[ctx].paths.push(path);
+  // Modules "single-file" : on remplit aussi le champ texte si c'est l'unique
+  if ((ctx === 'trim' || ctx === 'sc') && !S[ctx].paths.length + 1){
+    // noop
+  }
+  if (ctx === 'trim'){ const i=$('trimPath'); if(i && !i.value.trim()) i.value = path; }
+  if (ctx === 'sc'){ const i=$('scPath'); if(i && !i.value.trim()) i.value = path; }
   invalidateScan(ctx);
 }
 function addPath(ctx){
@@ -1129,6 +1320,8 @@ function updateModuleAvailability(){
   set('subGo',   S.sub.paths.length   > 0 && t.subtitles_script);
   set('sceneGo', S.scene.paths.length > 0 && t.scenedetect);
   set('audioGo', S.audio.paths.length > 0 && t.librosa);
+  set('trimGo',  (($('trimPath') || {}).value || '').trim() !== '');
+  set('scGo',    (($('scPath') || {}).value || '').trim() !== '' && (($('scScript') || {}).value || '').trim() !== '');
   const rhythmVideo = (($('rhythmVideo') || {}).value || '').trim();
   const rhythmAudio = (($('rhythmAudio') || {}).value || '').trim();
   set('rhythmGo', !!rhythmVideo && !!rhythmAudio && t.librosa);
@@ -1398,7 +1591,28 @@ async function scanScenes(){
     setMsg('scene', errNote(e.message || e));
   }
 }
-async function startSceneDetect(){
+async function startTrim(){
+  const path = ($('trimPath') && $('trimPath').value || '').trim();
+  if (!path){ toast('Choisissez un fichier', 'err'); return; }
+  const cfg = {
+    path: path,
+    min_silence: clampNum($('trimMinSilence').value, 0.1, 5, 0.35),
+    keep_silence: clampNum($('trimKeepSilence').value, 0, 0.5, 0.10),
+    top_db: clampNum($('trimTopDb').value, 10, 60, 35),
+    enable_fillers: !!$('trimFillers').checked,
+    device: 'auto',
+  };
+  beginJob('trim', '/api/autotrim/start', cfg, { seconds: 60, human: '1 min' });
+}
+function startScriptCheck(){
+  const path = ($('scPath') && $('scPath').value || '').trim();
+  const script = ($('scScript') && $('scScript').value || '').trim();
+  if (!path){ toast('Choisissez un fichier', 'err'); return; }
+  if (!script){ toast('Fournissez le script de référence', 'err'); return; }
+  const cfg = { path: path, script: script, device: 'auto' };
+  beginJob('sc', '/api/scriptcheck/start', cfg, { seconds: 30, human: '30 s' });
+}
+function startSceneDetect(){
   if (!S.scene.paths.length){
     setMsg('scene', errNote('Sélectionnez d\'abord au moins une vidéo.'));
     return;
@@ -1489,7 +1703,8 @@ function pollJob(key){
         handleJobDone(key, job);
       } else if (job.status === 'error'){
         clearInterval(timer); S[key].timer = null;
-        failJob(key, job.error || 'Erreur inconnue');
+        updateJobProgress(key, job);
+        failJob(key, job.error || 'Échec — voir le journal ci-dessous');
       } else if (job.status === 'cancelled'){
         clearInterval(timer); S[key].timer = null;
         cancelledJob(key);
@@ -1563,6 +1778,30 @@ function handleJobDone(key, job){
   } else if (key === 'rhythm'){
     renderRhythmResults(r);
     toast(`${r.segments || 0} plans générés`, 'ok');
+  } else if (key === 'trim'){
+    const out = r.output || '—';
+    $('trimResult').style.display = 'block';
+    $('trimOut').innerHTML = `<b>${escapeHtml(out)}</b><br>
+      durée : ${r.input_duration}s → ${r.output_duration}s
+      (<b>${r.removed_pct}%</b> supprimés, ${r.seconds_saved}s gagnées)
+      <br>${escapeHtml(r.silence_cuts)} blancs et ${escapeHtml(r.filler_words)} hésitations coupés.`;
+    setMsg('trim', `<div class="note okn">✅ Fichier produit : <span class="nt">${escapeHtml(out)}</span></div>`);
+    toast('Coupe terminée', 'ok');
+  } else if (key === 'sc'){
+    $('scResult').style.display = 'block';
+    const cov = Number(r.coverage_pct || 0);
+    const verdict = r.verdict || '';
+    let color = 'okn';
+    if (cov < 95) color = 'warn';
+    if (cov < 70) color = 'err';
+    let dev = (r.deviations || []).slice(0, 8).map((d) =>
+      `${d.type} — s:${(d.script_words||[]).join(' ')}, d:${(d.said_words||[]).join(' ')}`).join('\n');
+    $('scOut').innerHTML = `Couverture : <b>${cov} %</b><br>
+      Mots script : ${r.script_word_count || 0} · Mots dits : ${r.said_word_count || 0}<br>
+      <b>${escapeHtml(verdict)}</b>` +
+      (dev ? `<div class="logs" style="margin-top:8px">${escapeHtml(dev)}</div>` : '');
+    setMsg('sc', `<div class="note ${color}">${escapeHtml(verdict)}</div>`);
+    toast('Vérification terminée', 'info');
   }
 }
 function failJob(key, message){
@@ -1955,6 +2194,85 @@ async function exportBeatsZip(){
 }
 
 /* ── Exposition globale (handlers inline) ───────────────────────────────── */
+/* ── Suivi global des tâches (visible sur tous les onglets) ─ */
+const HW_LABEL = { cpu: '🖥️ CPU', gpu: '🎮 GPU', both: '🖥️ CPU + GPU' };
+
+async function pollDock(){
+  const dock = $('taskDock');
+  const list = $('taskList');
+  if (!dock || !list) return;
+  if (!S.serverOk) return;
+  let data;
+  try {
+    const r = await fetch('/api/jobs', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+  } catch (e) { return; }
+  if (data.system) renderSystemStatus(data.system);
+
+  const active = data.active || [];
+  if (active.length === 0){
+    dock.classList.add('hidden');
+    return;
+  }
+  dock.classList.remove('hidden');
+  const title = $('dockTitle');
+  if (title) title.textContent = `⚙️ ${active.length} travail${active.length>1?'ux':''} en cours`;
+
+  list.innerHTML = active.map((job) => {
+    const p = Math.max(0, Math.min(1, Number(job.progress) || 0));
+    const hw = job.hw || 'cpu';
+    const isWaiting = job.status === 'queued' && /créneau/.test(job.label || '');
+    const bar = `<div class="task-bar${isWaiting ? ' waiting' : ''}"><i style="width:${Math.round(p*100)}%"></i></div>`;
+    let eta = '';
+    if (job.eta && job.eta.eta_human) eta = `· reste ~${job.eta.eta_human}`;
+    else if (job.estimate && job.estimate.human) eta = `· estimé ~${job.estimate.human}`;
+    const cur = job.total > 0 ? `· ${(Math.min((Number(job.done)||0)+1, job.total))}/${job.total}` : '';
+    return `
+      <div class="task" data-id="${job.id}" data-type="${escapeHtml(job.type)}">
+        <div class="task-top">
+          <span class="task-name">${escapeHtml(job.module || JOB_LABEL[job.type] || job.type)}</span>
+          ${job.file ? `<span class="task-file" title="${escapeAttr(job.file)}">${escapeHtml(job.file)}</span>` : ''}
+          <span class="hwchip ${hw}">${HW_LABEL[hw] || hw}</span>
+          <span class="task-pct">${Math.round(p*100)} %</span>
+          <span class="task-eta">${cur} ${eta}</span>
+          <button class="task-cancel" onclick="dockCancel(${job.id})">Arrêter</button>
+        </div>
+        ${bar}
+        <div class="task-label">${escapeHtml(job.label || 'Travail en cours…')}</div>
+        ${job.cached ? '<div class="task-label">⚡ résultat en cache</div>' : ''}
+      </div>`;
+  }).join('');
+}
+
+async function dockCancel(id){
+  try {
+    await fetch('/api/job/' + id + '/cancel', { method: 'POST' });
+  } catch(e){}
+}
+
+function ensureHwBars(){
+  const mods = [
+    ['convert', 'panel-convert'], ['subtitles', 'panel-subtitles'],
+    ['scenes', 'panel-scenes'], ['audio', 'panel-audio'], ['rhythm', 'panel-rhythm'],
+    ['trim', 'panel-trim'], ['sc', 'panel-scriptcheck'],
+  ];
+  mods.forEach(([m, panelId]) => {
+    const panel = $(panelId);
+    if (!panel) return;
+    if (panel.querySelector('.hwbar[data-hwmod="' + m + '"]')) return;
+    const bar = document.createElement('div');
+    bar.className = 'hwbar';
+    bar.dataset.hwmod = m;
+    const firstCard = panel.querySelector('.card');
+    if (firstCard) panel.insertBefore(bar, firstCard);
+    else panel.appendChild(bar);
+  });
+}
+setTimeout(ensureHwBars, 200);
+setInterval(ensureHwBars, 4000);
+
+/* ── Export du contexte window ─ */
 Object.assign(window, {
   switchTab, addPath, delPath,
   browseFiles, browseFolder, openBrowser, closeBrowser, browse,
@@ -1966,6 +2284,7 @@ Object.assign(window, {
   cancelJob, exportScenes, exportScenesZip, exportBeats, exportBeatsZip,
   installDavinci, openDavinciHelp,
   browseRhythm, scanRhythm, startRhythm, exportRhythm, setRhythmSource,
+  startTrim, startScriptCheck, dockCancel, updateModuleAvailability,
 });
 </script>
 </body>

@@ -30,6 +30,14 @@ SUBTITLES_PYTHON = (
 if not SUBTITLES_PYTHON.exists():
     SUBTITLES_PYTHON = "/usr/bin/python3"  # repli : système (sans whisper)
 
+# Interpréteur GPU : venv ROCm (torch + openai-whisper) utilisé par ResolveSubs
+# pour transcrire sur la RX 6600. `None` si absent → repli CPU.
+SUBTITLES_PYTHON_GPU = (
+    Path(os.environ.get("HOME", "")) / ".venvs" / "tts-rocm" / "bin" / "python"
+)
+if not SUBTITLES_PYTHON_GPU.exists():
+    SUBTITLES_PYTHON_GPU = None
+
 # Python système pour convert.py (stdlib uniquement)
 CONVERT_PYTHON = "/usr/bin/python3"
 

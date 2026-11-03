@@ -23,11 +23,18 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from urllib.parse import unquote
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from validate_fcpxml import validate_file as _validate_fcpxml_file
+except Exception:
+    _validate_fcpxml_file = None
 
 from app.davinci import build_script, install_script          # noqa: E402
-from app.fcpxml import markers_document                        # noqa: E402
+from app.fcpxml import markers_document, cuts_document          # noqa: E402
 from app.services.audio_beats import export_markers            # noqa: E402
 from app.services.rhythm import (build_cut_plan, cut_points,   # noqa: E402
                                  export_rhythm)
@@ -177,6 +184,101 @@ def test_fcpxml() -> None:
           root.find(".//asset-clip/marker") is not None)
     check("asset avec media-rep", root.find(".//asset/media-rep") is not None)
     check("sequence avec spine", root.find(".//sequence/spine") is not None)
+
+
+def test_fcpxml_scene_valid() -> None:
+    print("\\n[2b] FCPXML scènes (dict précalculé)")
+    video = "/media/lesombre/2A14-B525/SSD_E/Opencode/_externes/test_vidéo/fragment-trailer.mp4"
+    if not os.path.isfile(video):
+        check("vidéo de fixture présente", False, video)
+        return
+    # Dict précalculé : inclut un plan nul et un plan hors bornes, qui doivent
+    # être ignorés par cuts_document (anti-flaky : pas de scenedetect réel).
+    cuts = [
+        {"start": 0.0, "duration": 2.0},
+        {"start": 2.0, "duration": 0.0},
+        {"start": 100.0, "duration": 1.0},
+        {"start": 4.0, "duration": 1.0 / 30.0},
+    ]
+    xml = cuts_document(video, 30.0, cuts, title="scene_valid")
+    tmp = None
+    try:
+        try:
+            root = ET.fromstring(xml.split("\n", 2)[2])
+            check("FCPXML scène : XML bien formé", True)
+        except ET.ParseError as exc:
+            check("FCPXML scène : XML bien formé", False, str(exc))
+            return
+
+        fd = tempfile.NamedTemporaryFile("w", suffix=".fcpxml",
+                                         delete=False, encoding="utf-8")
+        fd.write(xml)
+        fd.close()
+        tmp = fd.name
+        if _validate_fcpxml_file is not None:
+            errs = _validate_fcpxml_file(tmp)
+            check("FCPXML scène : validateur vert", not errs,
+                  "; ".join(errs)[:120])
+        else:
+            check("validate_fcpxml importable", False, "module manquant")
+
+        clips = root.findall(".//sequence/spine/asset-clip")
+        check("FCPXML scène : 2 clips valides",
+              len(clips) == 2, str(len(clips)))
+        durs = [ET.fromstring("<x/>") is not None or True for _ in clips]
+        # aucune durée < 1 frame
+        from fractions import Fraction
+        frame = Fraction(1, 30)
+        ok_min = all(_parse_rational_safe(c.get("duration")) >= frame
+                     for c in clips)
+        check("FCPXML scène : durées >= 1 frame", ok_min)
+        # sequence duration = somme
+        seq = root.find(".//sequence")
+        total = sum((_parse_rational_safe(c.get("duration")) for c in clips),
+                    Fraction(0, 1))
+        check("FCPXML scène : durée séquence = somme",
+              _parse_rational_safe(seq.get("duration")) == total,
+              f"{seq.get('duration')} vs {total}")
+        # src existe
+        srcs = [a.find("media-rep").get("src")
+                for a in root.findall(".//asset")
+                if a.find("media-rep") is not None]
+        src_paths = []
+        for s in srcs:
+            if not s or not s.startswith("file://"):
+                src_paths.append(None)
+                continue
+            fp = unquote(s[len("file://"):])
+            if fp.startswith("//"):
+                fp = fp[1:]
+            src_paths.append(fp)
+        exists = all(p is not None and os.path.exists(p) for p in src_paths)
+        check("FCPXML scène : src existe", exists)
+        # noms sans newline
+        names_ok = all("\\n" not in (c.get("name") or "")
+                       for c in clips)
+        check("FCPXML scène : noms sans newline", names_ok)
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _parse_rational_safe(value):
+    try:
+        from fractions import Fraction
+        text = str(value).strip()
+        if not text.endswith("s"):
+            return Fraction(0)
+        core = text[:-1]
+        if "/" in core:
+            a, b = core.split("/", 1)
+            return Fraction(int(a), int(b))
+        return Fraction(int(core), 1)
+    except (ValueError, ZeroDivisionError):
+        return Fraction(0)
 
 
 def test_exports() -> None:
@@ -540,6 +642,7 @@ def main() -> int:
     print("EdittingHub — tests de fumée")
     test_script()
     test_fcpxml()
+    test_fcpxml_scene_valid()
     test_exports()
     test_install()
     test_alignment()

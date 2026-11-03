@@ -86,8 +86,39 @@ cd EdittingHub
   puis le fichier est relu à chaque clic (pas besoin de redémarrer).
 - Endpoint : `POST /api/audio/davinci/install` (`job_id`, `fps`, `ranks`, `file_index`).
 
-## Conventions
-- 100% local : zéro import de bibliothèques externes dans le frontend
+### 6. Coupe des blancs et hésitations (`app/services/autotrim.py`)
+- Détecte les silences (librosa split, top_db=35) et les hésitations
+  (« euh… », « hmm… », « um… ») via faster-whisper/Whisper (GPU si venv
+  ROCm, sinon CPU).
+- Fusionne les plages à supprimer, garde ~100 ms de respiration aux bords.
+- Produit un fichier réel (`<nom>_trimmed.mp4/.wav`) à côté du rush — pas
+  une timeline.
+- Job `autotrim`, statut en temps réel + barre de suivi globale, matériel CPU
+  (silences) + GPU/CPU (Whisper).
+- Routes : `POST /api/autotrim/scan`, `POST /api/autotrim/start`.
+
+### Infrastructure (v1.5)
+- `app/runtime.py` : budget de threads BLAS (THREAD_BUDGET, env EDITTINGHUB_THREADS),
+  priorité `nice` pour les sous-processus (EDITTINGHUB_NICE), sondes CPU/GPU
+  AMD via sysfs (probes gpu_busy_percent), mémoire, charge.
+- `app/cache.py` : cache disque des analyses coûteuses (`outputs/cache/audio`,
+  `scenes`) — clé = chemin+taille+mtime+paramètres, invalidation automatique.
+- `GET /api/jobs` : suivi global de tous les jobs (tous onglets), consommé par
+  la barre collante `#taskDock` de l'interface (matériel CPU/GPU/CPU+GPU, ETA).
+- Sous-titrage : interpréteur GPU (venv ROCm `tts-rocm`) automatique selon
+  `device`, propagation de `error` au frontend, repli automatique musique si VAD
+  ne trouve rien, `_check_backend` corrigé (importlib.util explicite).
+- Barre de suivi + chips matériel (`hwchip`, `hwbar`) dans chaque onglet.
+- FCPXML : plan nul ignoré (lève le crash à l'import sous Resolve).
+- Beats : utilisation du chemin hybride grille+attaques fines (le chemin existant
+  était court-circuité), seuils de classement fondés sur le temps (et non sur le
+  nombre d'onsets), pas de déclassement systématique des syncopations.
+
+### Pièges nouveaux
+- `app/static/index.html` : tout `$('id')` doit exister ; la valeur renvoyée par
+  `JOB_LABEL` doit toujours être définie (utiliser `job.module` côté frontend).
+- Les bandeaux matériel sont remplis par `/api/system` (GPU via sysfs AMD) — pas
+  de rocm-smi requis.
 - CSS inline via variables `--bg`, `--card`, `--acc`, etc.
 - Vanilla JS, pas de framework (React/Vue)
 - Backend : FastAPI + uvicorn (threadpool pour les jobs background)

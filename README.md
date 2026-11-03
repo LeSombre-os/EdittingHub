@@ -1,7 +1,7 @@
 # EdittingHub
 
 Studio de montage **100 % local** (aucun cloud, aucune télémétrie, aucune IA
-distante) qui réunit **cinq** outils autour d'une même interface web :
+distante) qui réunit **six** outils autour d'une même interface web :
 
 | Module | Ce qu'il fait | Techno |
 |---|---|---|
@@ -10,6 +10,7 @@ distante) qui réunit **cinq** outils autour d'une même interface web :
 | **Plans** | Découpe une vidéo en plans et exporte EDL / FCPXML / CSV | PySceneDetect + OpenCV |
 | **Audio** | Détecte les *beats*, les classe en 3 rangs d'énergie et les pose en **marqueurs dans DaVinci Resolve** | Librosa |
 | **Rythme** | Monte la vidéo **au rythme de la musique** : découpe séquentielle sur les beats, plans min/max, bouclage, exports FCPXML/EDL/CSV | Librosa + logique locale |
+| **Coupe blancs** | Supprime les passages silencieux et les hésitations (« euh… ») d'un rush audio/vidéo et produit un fichier prêt à publier | ffmpeg + librosa + faster-whisper |
 
 Interface : un seul fichier HTML (CSS + Vanilla JS, zéro CDN, zéro framework).
 Backend : FastAPI + uvicorn, jobs asynchrones annulables.
@@ -247,6 +248,11 @@ Toutes les routes sont locales (`127.0.0.1:8005`).
 | `POST` | `/api/rhythm/scan` | Vérifie vidéo + musique, renvoie durées + estimation |
 | `POST` | `/api/rhythm/start` | Lance analyse beats + calcul du montage (job) |
 | `POST` | `/api/rhythm/export` | Export FCPXML / EDL / CSV du montage |
+| `POST` | `/api/autotrim/scan` | Vérifie un fichier et estime la durée |
+| `POST` | `/api/autotrim/start` | Coupe blancs + hésitations (job, fichier `_trimmed`) |
+| `GET` | `/api/jobs` | Suivi global de *tous* les jobs (tous onglets) : progression, ETA, matériel |
+| `GET` | `/api/cache` | État du cache d'analyses (beats, plans) |
+| `POST` | `/api/cache/clear` | Vide le cache (tout ou par type) |
 | `GET` | `/api/job/{id}` | État, progression, résultat d'un job |
 | `POST` | `/api/job/{id}/cancel` | Annule le job et tue ses sous-processus |
 

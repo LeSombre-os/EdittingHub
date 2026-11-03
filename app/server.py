@@ -44,9 +44,9 @@ from fastapi.responses import (FileResponse, HTMLResponse, PlainTextResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from app import estimates
-from app.config import (DEFAULT_FPS, HOST, PORT, WORKSPACE_ROOT,
-                        check_external_tools)
+from app import cache, estimates, runtime
+from app.config import (DEFAULT_AUDIO_SR, DEFAULT_FPS, HOST, PORT,
+                        WORKSPACE_ROOT, check_external_tools)
 from app.errors import JobCancelled
 from app.media import AUDIO_EXTS, VIDEO_EXTS, probe
 from app.utils import collect_files, fmt_duration, fmt_size
@@ -79,7 +79,45 @@ _JOB_SEQ = itertools.count(1)
 _JOBS_LOCK = threading.Lock()
 
 # Un seul job lourd par module : évite de tuer le mauvais sous-processus
-_RUNNING = {"convert": None, "subtitles": None}
+_RUNNING = {"convert": None, "subtitles": None, "scenes": None, "audio": None,
+            "rhythm": None, "autotrim": None, "scriptcheck": None}
+
+# Nombre de jobs lourds simultanés. Au-delà, le job démarre en attente d'un
+# créneau : la machine reste utilisable (l'UI affiche « en attente »).
+_HEAVY_SLOTS = threading.BoundedSemaphore(runtime.MAX_HEAVY_JOBS)
+
+# Libellés affichés dans le suivi global
+MODULE_LABELS = {
+    "convert": "Conversion",
+    "subtitles": "Sous-titrage",
+    "scenes": "Découpage de plans",
+    "audio": "Analyse de beats",
+    "rhythm": "AutoMontage",
+    "autotrim": "Coupe blancs & hésitations",
+    "scriptcheck": "Vérification de script",
+}
+
+# Matériel utilisé par défaut (surchargé au lancement si le GPU est en jeu)
+MODULE_HW = {
+    "convert": "cpu",
+    "subtitles": "cpu",
+    "scenes": "cpu",
+    "audio": "cpu",
+    "rhythm": "cpu",
+    "autotrim": "cpu",
+    "scriptcheck": "cpu",
+}
+
+# Matériel utilisé par défaut (surchargé au lancement si le GPU est en jeu)
+MODULE_HW = {
+    "convert": "cpu",
+    "subtitles": "cpu",
+    "scenes": "cpu",
+    "audio": "cpu",
+    "rhythm": "cpu",
+    "autotrim": "cpu",
+    "scriptcheck": "cpu/gpu",
+}
 
 
 def create_job(job_type: str, config: dict, estimate: dict | None = None) -> int:
@@ -89,10 +127,15 @@ def create_job(job_type: str, config: dict, estimate: dict | None = None) -> int
         JOBS[jid] = {
             "id": jid,
             "type": job_type,
+            "module": MODULE_LABELS.get(job_type, job_type),
             "status": "queued",
             "progress": 0.0,
             "done": 0,
             "total": 0,
+            "label": "En file d'attente",
+            "file": None,
+            "hw": MODULE_HW.get(job_type, "cpu"),
+            "cached": False,
             "logs": [],
             "result": None,
             "error": None,
@@ -157,6 +200,69 @@ def append_log(jid: int, line: str, limit: int = 600):
         logs.append(line)
         if len(logs) > limit:
             del logs[: len(logs) - limit]
+
+
+def set_activity(jid: int, label: str | None = None, file: str | None = None,
+                 hw: str | None = None, **kwargs):
+    """Met à jour « sur quoi travaille le job » (affiché dans le suivi global).
+
+    `label` décrit l'étape en cours (« Analyse des onsets… »), `file` le
+    fichier courant, `hw` le matériel utilisé (`cpu`, `gpu`, `both`).
+    """
+    if label is not None:
+        kwargs["label"] = label
+    if file is not None:
+        kwargs["file"] = os.path.basename(str(file))
+    if hw is not None:
+        kwargs["hw"] = hw
+    if kwargs:
+        update_job(jid, **kwargs)
+
+
+class heavy_slot:
+    """Créeau d'exécution : limite les jobs lourds simultanés.
+
+    Au-delà de `runtime.MAX_HEAVY_JOBS`, le job attend (statut « queued »)
+    au lieu de saturer la machine. L'annulation est respectée pendant
+    l'attente.
+    """
+
+    def __init__(self, jid: int):
+        self.jid = jid
+        self.acquired = False
+
+    def __enter__(self):
+        job = get_job(self.jid)
+        cancel = job.get("_cancel") if job else None
+        if cancel is not None and cancel.is_set():
+            raise JobCancelled("Annulé avant démarrage.")
+        if _HEAVY_SLOTS.acquire(blocking=False):
+            self.acquired = True
+            return self
+        set_activity(self.jid, label="En attente d'un créneau CPU…",
+                     status="queued")
+        # Attente par tranches pour rester annulable.
+        while not _HEAVY_SLOTS.acquire(timeout=0.4):
+            if cancel is not None and cancel.is_set():
+                raise JobCancelled("Annulé pendant l'attente.")
+        self.acquired = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.acquired:
+            try:
+                _HEAVY_SLOTS.release()
+            except ValueError:
+                pass
+        return False
+
+
+def active_jobs() -> list[dict]:
+    """Jobs en cours ou en attente (pour la barre de suivi globale)."""
+    with _JOBS_LOCK:
+        jobs = [job_public_view(job) for job in JOBS.values()
+                if job["status"] in ("queued", "running", "cancelling")]
+    return sorted(jobs, key=lambda j: j["id"])
 
 
 def job_public_view(job: dict) -> dict:
@@ -358,7 +464,13 @@ def _convert_key(target: str, preset: str) -> str:
 
 
 def _subtitle_key(model: str, device: str) -> str:
-    dev = "cpu" if device in ("cpu", "auto") else "gpu"
+    # « auto » finit sur GPU quand le venv ROCm peut transcrire, sinon CPU.
+    if device == "cpu":
+        dev = "cpu"
+    elif device == "gpu":
+        dev = "gpu"
+    else:
+        dev = "gpu" if runtime.whisper_gpu_available() else "cpu"
     return f"{model}:{dev}"
 
 
@@ -400,7 +512,9 @@ def _run_convert_job(job_id: int):
     if not job:
         return
     cfg = job["config"]
-    update_job(job_id, status="running", started=time.time())
+    target = cfg.get("target", "resolve")
+    hw = "both" if runtime.gpu_available() else "cpu"
+    set_activity(job_id, label="Conversion en cours…", hw=hw)
 
     def progress_cb(done, total, frac, line, stats):
         if job.get("_cancel").is_set():
@@ -409,20 +523,25 @@ def _run_convert_job(job_id: int):
         append_log(job_id, line)
 
     try:
-        result = _convert_svc.run(
-            paths=cfg["paths"],
-            target=cfg.get("target", "resolve"),
-            preset=cfg.get("preset", "sq"),
-            keep_4k=cfg.get("keep_4k", False),
-            force=cfg.get("force", False),
-            jobs=cfg.get("jobs", 4),
-            cancel_event=job.get("_cancel"),
-            progress_callback=progress_cb,
-        )
+        with heavy_slot(job_id):
+            update_job(job_id, status="running", started=time.time())
+            set_activity(job_id,
+                         label=f"Conversion {target} · preset {cfg.get('preset', 'sq')}",
+                         hw=hw)
+            result = _convert_svc.run(
+                paths=cfg["paths"],
+                target=target,
+                preset=cfg.get("preset", "sq"),
+                keep_4k=cfg.get("keep_4k", False),
+                force=cfg.get("force", False),
+                jobs=cfg.get("jobs", 4),
+                cancel_event=job.get("_cancel"),
+                progress_callback=progress_cb,
+            )
         ended = time.time()
         if result["status"] in ("cancelled", "error"):
             # Un arrêt brutal laisse un `.part-*.mov` de plusieurs Go : on nettoie
-            for path in _cleanup_partials(cfg["paths"], cfg.get("target", "resolve")):
+            for path in _cleanup_partials(cfg["paths"], target):
                 append_log(job_id, f"[NETTOYAGE] fichier partiel supprimé : {path}")
         update_job(job_id,
                    status=result["status"],
@@ -433,9 +552,11 @@ def _run_convert_job(job_id: int):
             media = sum(float(probe(p).get("duration") or 0.0)
                         for p in cfg["paths"] if os.path.isfile(p))
             estimates.record("convert",
-                             _convert_key(cfg.get("target", "resolve"),
-                                          cfg.get("preset", "sq")),
+                             _convert_key(target, cfg.get("preset", "sq")),
                              media, ended - (job.get("started") or ended))
+    except JobCancelled as e:
+        update_job(job_id, status="cancelled", ended=time.time(), error=None)
+        append_log(job_id, f"[ANNULÉ] {e}")
     except Exception as e:
         update_job(job_id, status="error",
                    error=str(e), ended=time.time())
@@ -450,7 +571,11 @@ def _run_subtitle_job(job_id: int):
     if not job:
         return
     cfg = job["config"]
-    update_job(job_id, status="running", started=time.time())
+    model = cfg.get("model", "small")
+    device = cfg.get("device", "auto")
+    uses_gpu = device != "cpu" and runtime.whisper_gpu_available()
+    hw = "gpu" if uses_gpu else "cpu"
+    set_activity(job_id, hw=hw, label=f"Transcription · modèle {model}")
 
     def progress_cb(done, total, frac, line, stats):
         if job.get("_cancel").is_set():
@@ -459,36 +584,45 @@ def _run_subtitle_job(job_id: int):
         append_log(job_id, line, limit=2000)
 
     try:
-        result = _subtitle_svc.run(
-            paths=cfg["paths"],
-            language=cfg.get("language", "auto"),
-            model=cfg.get("model", "small"),
-            offset=cfg.get("offset", 0.0),
-            device=cfg.get("device", "auto"),
-            max_chars=cfg.get("max_chars", 42),
-            max_lines=cfg.get("max_lines", 2),
-            mode=cfg.get("mode", "phrases"),
-            words_per_cue=cfg.get("words_per_cue", 1),
-            music=cfg.get("music", False),
-            prompt=cfg.get("prompt"),
-            force=cfg.get("force", False),
-            jobs=cfg.get("jobs", 1),
-            cancel_event=job.get("_cancel"),
-            progress_callback=progress_cb,
-        )
+        with heavy_slot(job_id):
+            update_job(job_id, status="running", started=time.time())
+            set_activity(job_id,
+                         label=f"Transcription {model} ({'GPU' if uses_gpu else 'CPU'})",
+                         hw=hw)
+            result = _subtitle_svc.run(
+                paths=cfg["paths"],
+                language=cfg.get("language", "auto"),
+                model=model,
+                offset=cfg.get("offset", 0.0),
+                device=device,
+                max_chars=cfg.get("max_chars", 42),
+                max_lines=cfg.get("max_lines", 2),
+                mode=cfg.get("mode", "phrases"),
+                words_per_cue=cfg.get("words_per_cue", 1),
+                music=cfg.get("music", False),
+                prompt=cfg.get("prompt"),
+                force=cfg.get("force", False),
+                jobs=cfg.get("jobs", 1),
+                cancel_event=job.get("_cancel"),
+                progress_callback=progress_cb,
+            )
         ended = time.time()
         update_job(job_id,
                    status=result["status"],
                    result=result,
-                   error=result.get("error"),
+                   error=result.get("error") or (
+                       None if result["status"] in ("done", "cancelled")
+                       else "Transcription échouée — voir le journal ci-dessous."),
                    ended=ended)
         if result["status"] == "done":
             media = sum(float(probe(p).get("duration") or 0.0)
                         for p in cfg["paths"] if os.path.isfile(p))
             estimates.record("subtitles",
-                             _subtitle_key(cfg.get("model", "small"),
-                                           cfg.get("device", "auto")),
+                             _subtitle_key(model, device),
                              media, ended - (job.get("started") or ended))
+    except JobCancelled as e:
+        update_job(job_id, status="cancelled", ended=time.time(), error=None)
+        append_log(job_id, f"[ANNULÉ] {e}")
     except Exception as e:
         update_job(job_id, status="error",
                    error=str(e), ended=time.time())
@@ -514,6 +648,7 @@ def _run_scene_job(job_id: int):
     total_media = sum(durations) or 1.0
     tracker = estimates.EtaTracker(total_media)
     done_media = 0.0
+    set_activity(job_id, hw="cpu", label="Détection des plans")
 
     try:
         if not files:
@@ -527,6 +662,8 @@ def _run_scene_job(job_id: int):
             last_log = [0.0]
             append_log(job_id, f"[{idx + 1}/{len(files)}] {name} "
                                f"({fmt_duration(media)})")
+            set_activity(job_id, file=name,
+                         label=f"Détection des plans · {name}")
 
             def progress_cb(frac, frame_num, total_frames,
                             _idx=idx, _name=name, _media=media,
@@ -549,23 +686,41 @@ def _run_scene_job(job_id: int):
                            if info.get("eta_human") else ""),
                     )
 
-            result = detect_scenes(
-                video_path=path,
-                threshold=cfg.get("threshold", 30.0),
-                min_scene_len=cfg.get("min_scene_len", 1.0),
-                downscale_factor=ds,
-                progress_cb=progress_cb,
-                cancel_event=cancel,
-            )
-            estimates.record("scenes", _scene_key(ds),
-                             result.get("duration") or media,
-                             result.get("elapsed") or 0.0)
+            # Cache : mêmes fichier + seuil + réduction = même découpage.
+            ckey = cache.make_key("scenes", path, {
+                "threshold": cfg.get("threshold", 30.0),
+                "min_scene_len": cfg.get("min_scene_len", 1.0),
+                "downscale": ds,
+            })
+            hit = cache.get("scenes", ckey)
+            if hit and hit.get("cuts"):
+                result = dict(hit)
+                result["cached"] = True
+                update_job(job_id, cached=True,
+                           progress=round((idx + 0.9) / max(1, len(files)), 4))
+                append_log(job_id, "    → résultat en cache (analyse ignorée)")
+            else:
+                with heavy_slot(job_id):
+                    if get_job(job_id).get("status") == "queued":
+                        update_job(job_id, status="running", started=started)
+                    result = detect_scenes(
+                        video_path=path,
+                        threshold=cfg.get("threshold", 30.0),
+                        min_scene_len=cfg.get("min_scene_len", 1.0),
+                        downscale_factor=ds,
+                        progress_cb=progress_cb,
+                        cancel_event=cancel,
+                    )
+                cache.put("scenes", ckey, {**result, "cached": False})
+                estimates.record("scenes", _scene_key(ds),
+                                 result.get("duration") or media,
+                                 result.get("elapsed") or 0.0)
             entry = dict(result)
             entry.update({"path": path, "name": name})
             entries.append(entry)
             done_media += media
             append_log(job_id, f"    → {result['total_cuts']} plans "
-                               f"en {result['elapsed']}s")
+                               f"en {result.get('elapsed', 0)}s")
 
         ended = time.time()
         result = {
@@ -610,6 +765,7 @@ def _run_audio_job(job_id: int):
     durations = [float(probe(f).get("duration") or 0.0) for f in files]
     tracker = estimates.EtaTracker(sum(durations) or 1.0)
     done_media = 0.0
+    set_activity(job_id, hw="cpu", label="Analyse des beats")
 
     try:
         if not files:
@@ -622,6 +778,7 @@ def _run_audio_job(job_id: int):
             media = durations[idx]
             append_log(job_id, f"[{idx + 1}/{len(files)}] {name} "
                                f"({fmt_duration(media)})")
+            set_activity(job_id, file=name, label=f"Analyse des beats · {name}")
 
             def progress_cb(frac, label, _idx=idx, _media=media,
                             _base=done_media):
@@ -634,16 +791,33 @@ def _run_audio_job(job_id: int):
                            done=_idx, total=len(files))
                 append_log(job_id, f"    {label}")
 
-            result = analyze_audio(
-                audio_path=path,
-                sr=cfg.get("sample_rate", 22050),
-                progress_cb=progress_cb,
-                cancel_event=cancel,
-                offset=(float(cfg.get("offset_ms") or 0.0) / 1000.0),
-            )
-            estimates.record("audio", "default",
-                             result.get("duration") or media,
-                             result.get("elapsed") or 0.0)
+            sr = cfg.get("sample_rate", DEFAULT_AUDIO_SR)
+            offset = float(cfg.get("offset_ms") or 0.0) / 1000.0
+            # Cache : un morceau déjà analysé avec les mêmes paramètres ne se
+            # réanalyse pas (gain de plusieurs secondes à chaque relance).
+            ckey = cache.make_key("audio", path, {"sr": sr, "offset": offset})
+            hit = cache.get("audio", ckey)
+            if hit and hit.get("beats"):
+                result = dict(hit)
+                result["cached"] = True
+                update_job(job_id, cached=True,
+                           progress=round((idx + 0.95) / max(1, len(files)), 4))
+                append_log(job_id, "    → résultat en cache (analyse ignorée)")
+            else:
+                with heavy_slot(job_id):
+                    if get_job(job_id).get("status") == "queued":
+                        update_job(job_id, status="running", started=started)
+                    result = analyze_audio(
+                        audio_path=path,
+                        sr=sr,
+                        progress_cb=progress_cb,
+                        cancel_event=cancel,
+                        offset=offset,
+                    )
+                cache.put("audio", ckey, {**result, "cached": False})
+                estimates.record("audio", "default",
+                                 result.get("duration") or media,
+                                 result.get("elapsed") or 0.0)
             entry = dict(result)
             entry.update({"path": path, "name": name})
             entries.append(entry)
@@ -694,6 +868,7 @@ def _run_rhythm_job(job_id: int):
     audio_path = cfg["audio_path"]
     started = time.time()
     update_job(job_id, status="running", started=started, total=1)
+    set_activity(job_id, hw="cpu", label="AutoMontage · analyse des beats")
 
     try:
         vinfo = probe(video_path)
@@ -724,16 +899,28 @@ def _run_rhythm_job(job_id: int):
                 last_log[0] = now
                 append_log(job_id, f"    {label}")
 
-        analysis = analyze_audio(
-            audio_path,
-            sr=cfg.get("sample_rate", 22050),
-            progress_cb=progress_cb,
-            cancel_event=cancel,
-        )
+        sr = cfg.get("sample_rate", DEFAULT_AUDIO_SR)
+        ckey = cache.make_key("audio", audio_path, {"sr": sr, "offset": 0.0})
+        hit = cache.get("audio", ckey)
+        if hit and hit.get("beats"):
+            analysis = dict(hit)
+            analysis["cached"] = True
+            update_job(job_id, cached=True, progress=0.9)
+            append_log(job_id, "    → beats en cache (analyse ignorée)")
+        else:
+            with heavy_slot(job_id):
+                analysis = analyze_audio(
+                    audio_path,
+                    sr=sr,
+                    progress_cb=progress_cb,
+                    cancel_event=cancel,
+                )
+            cache.put("audio", ckey, {**analysis, "cached": False})
         if cancel.is_set():
             raise JobCancelled("Montage annulé.")
         append_log(job_id, f"    → {analysis['total_beats']} beats, "
                            f"{analysis['tempo']} BPM")
+        set_activity(job_id, label="AutoMontage · calcul du plan de coupe")
         update_job(job_id, progress=0.92)
 
         plan = build_cut_plan(
@@ -791,6 +978,59 @@ def _run_rhythm_job(job_id: int):
         append_log(job_id, f"[ERREUR] {e}")
 
 
+def _run_autotrim_job(job_id: int):
+    """Thread de la coupe des blancs : analyse + rendu média."""
+    job = get_job(job_id)
+    if not job:
+        return
+    cfg = job["config"]
+    src = os.path.abspath(str(cfg.get("path") or ""))
+    from app.services.autotrim import analyze_and_trim
+
+    is_video = any(src.lower().endswith(e) for e in (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm", ".mts", ".m2ts"))
+    hw = "gpu" if (cfg.get("device", "auto") != "cpu"
+                    and runtime.whisper_gpu_available()) else "cpu"
+    set_activity(job_id, hw=hw, label="Coupe des blancs · détection")
+
+    def _cb(frac, label):
+        if job.get("_cancel").is_set():
+            raise RuntimeError("Annulé.")
+        update_job(job_id, progress=round(float(frac), 4),
+                   label=str(label) if label else None)
+        if label:
+            append_log(job_id, str(label))
+
+    try:
+        with heavy_slot(job_id):
+            update_job(job_id, status="running", started=time.time())
+            set_activity(job_id, hw=hw, label="Coupe des blancs · " + os.path.basename(src))
+            result = analyze_and_trim(
+                src_path=src,
+                min_silence=float(cfg.get("min_silence", 0.35)),
+                keep_silence=float(cfg.get("keep_silence", 0.10)),
+                top_db=float(cfg.get("top_db", 35.0)),
+                enable_fillers=bool(cfg.get("enable_fillers", True)),
+                progress_cb=_cb,
+                cancel_event=job.get("_cancel"),
+                device=cfg.get("device", "auto"),
+            )
+        ended = time.time()
+        update_job(job_id, status="done", result=result, progress=1.0,
+                   label="Terminé", ended=ended)
+        append_log(job_id, f"Terminé : {result['output_duration']}s "
+                           f"({result['removed_pct']} % supprimés) → {result['output']}")
+    except Exception as e:
+        if (job.get("_cancel").is_set() if job else False):
+            update_job(job_id, status="cancelled", ended=time.time(),
+                       error=None, label="Annulé")
+        else:
+            update_job(job_id, status="error", error=str(e), ended=time.time(),
+                       label="Erreur")
+        append_log(job_id, f"[ERREUR] {e}")
+    finally:
+        _release_slot("autotrim", job_id)
+
+
 # ── Routes API ─────────────────────────────────────────────────────────────
 
 # 1. Page d'accueil
@@ -828,76 +1068,62 @@ async def get_config():
 # 3.5. System resource usage
 @app.get("/api/system")
 async def system():
-    """Returns basic system resource usage (CPU load, memory)."""
-    import os
-    data = {"cpu_load": None, "memory": None, "swap": None, "gpu": None}
-    try:
-        # Load average (1, 5, 15 min)
-        if os.path.exists("/proc/loadavg"):
-            with open("/proc/loadavg") as f:
-                loads = f.read().split()
-                data["cpu_load"] = {
-                    "1min": float(loads[0]),
-                    "5min": float(loads[1]),
-                    "15min": float(loads[2]),
-                }
-        # Memory info
-        if os.path.exists("/proc/meminfo"):
-            mem = {}
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if ":" in line:
-                        key, val = line.split(":", 1)
-                        mem[key.strip()] = val.strip()
-            # Extract MemTotal and MemAvailable (Linux) or MemFree
-            mem_total = int(mem.get("MemTotal", "0 kB").split()[0])  # in kB
-            mem_avail = int(mem.get("MemAvailable", "0 kB").split()[0])
-            if mem_total > 0:
-                used = mem_total - mem_avail
-                data["memory"] = {
-                    "total": mem_total,
-                    "used": used,
-                    "percent": round(used / mem_total * 100, 1),
-                }
-            # Swap
-            swap_total = int(mem.get("SwapTotal", "0 kB").split()[0])
-            swap_free = int(mem.get("SwapFree", "0 kB").split()[0])
-            if swap_total > 0:
-                used_swap = swap_total - swap_free
-                data["swap"] = {
-                    "total": swap_total,
-                    "used": used_swap,
-                    "percent": round(used_swap / swap_total * 100, 1),
-                }
-    except Exception:
-        pass
-    # GPU info via nvidia-smi if available
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,utilization.memory,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().split("\n")
-            gpus = []
-            for line in lines:
-                if line:
-                    util_gpu, util_mem, temp = line.split(", ")
-                    gpus.append(
-                        {
-                            "gpu_util": int(util_gpu),
-                            "mem_util": int(util_mem),
-                            "temp": int(temp),
-                        }
-                    )
-            data["gpu"] = gpus
-    except Exception:
-        pass
-    return data
+    """Ressources système : CPU (charge + %), RAM, GPU AMD/NVIDIA, threads.
+
+    Alimente la barre d'état de l'UI : on voit si la machine est déjà chargée
+    avant de lancer un traitement, et quel matériel un job utilise.
+    """
+    snap = runtime.system_snapshot()
+    # Compatibilité avec l'ancien format (cpu_load / memory / swap / gpu)
+    snap["cpu_load"] = snap["cpu"]["load"]
+    snap["threads"] = runtime.thread_state()
+    return snap
+
+
+@app.get("/api/jobs")
+async def jobs_list():
+    """Suivi global : tous les jobs actifs (tous onglets confondus).
+
+    Utilisé par la barre de tâches collante de l'interface pour afficher,
+    quel que soit l'onglet ouvert, ce qui tourne, sur quel fichier, la
+    progression, le temps restant et le matériel utilisé.
+    """
+    active = active_jobs()
+    # Logs lourds exclus du suivi global (polling 900 ms) : on n'en garde que
+    # les 4 dernières lignes pour le diagnostic de la barre.
+    with _JOBS_LOCK:
+        for job in active:
+            original = JOBS.get(job["id"])
+            if original is not None:
+                job["logs"] = (original.get("logs") or [])[-4:]
+    finished = []
+    with _JOBS_LOCK:
+        finished = [job_public_view(job) for job in JOBS.values()
+                    if job["status"] in ("done", "error", "cancelled")]
+    finished.sort(key=lambda j: j.get("ended") or 0, reverse=True)
+    for job in finished:
+        job.pop("logs", None)
+        job.pop("result", None)
+    return {
+        "active": active,
+        "recent": finished[:8],
+        "system": runtime.system_snapshot(),
+        "cache": cache.stats(),
+    }
+
+
+@app.get("/api/cache")
+async def cache_info():
+    """État du cache d'analyses (beats, plans)."""
+    return {"stats": cache.stats(), "root": str(cache.CACHE_ROOT)}
+
+
+@app.post("/api/cache/clear")
+async def cache_clear(kind: str = ""):
+    """Vide le cache (tout ou un type : audio, scenes)."""
+    removed = cache.clear(kind or None)
+    return {"ok": True, "removed": removed, "stats": cache.stats()}
+
 
 
 # 4. Browser de fichiers intégré (repli si zenity absent)
@@ -912,6 +1138,50 @@ async def ls_files(path: str = ""):
 
 
 # 5. Sélecteur NATIF (zenity) — « Parcourir » ouvre le vrai explorateur
+def _run_scriptcheck_job(job_id: int):
+    """Thread de vérification script."""
+    job = get_job(job_id)
+    if not job:
+        return
+    cfg = job["config"]
+    src = os.path.abspath(str(cfg.get("path") or ""))
+    script_text = cfg.get("script", "")
+    from app.services.scriptcheck import check_script
+
+    from app.config import SUBTITLES_PYTHON_GPU
+    _gpu = SUBTITLES_PYTHON_GPU and os.path.isfile(str(SUBTITLES_PYTHON_GPU))
+    hw = "gpu" if (cfg.get("device", "auto") != "cpu" and _gpu) else "cpu"
+    set_activity(job_id, hw=hw, label="Vérification de script")
+
+    def _cb(frac, label):
+        if job.get("_cancel").is_set():
+            raise RuntimeError("Annulé.")
+        update_job(job_id, progress=round(float(frac), 4), label=str(label) if label else None)
+        if label:
+            append_log(job_id, str(label))
+
+    try:
+        with heavy_slot(job_id):
+            update_job(job_id, status="running", started=time.time())
+            result = check_script(src, script_text, progress_cb=_cb,
+                                 cancel_event=job.get("_cancel"),
+                                 device=cfg.get("device", "auto"))
+        ended = time.time()
+        update_job(job_id, status="done", result=result, progress=1.0,
+                   label="Terminé", ended=ended)
+        append_log(job_id, f"Terminé : couverture {result.get('coverage_pct')} %")
+    except Exception as e:
+        if (job.get("_cancel").is_set() if job else False):
+            update_job(job_id, status="cancelled", error=None, ended=time.time(),
+                       label="Annulé")
+        else:
+            update_job(job_id, status="error", error=str(e), ended=time.time(),
+                       label="Erreur")
+        append_log(job_id, f"[ERREUR] {e}")
+    finally:
+        _release_slot("scriptcheck", job_id)
+
+
 def _zenity() -> Optional[str]:
     return shutil.which("zenity")
 
@@ -1312,6 +1582,23 @@ class RhythmExportRequest(BaseModel):
     include_audio: bool = True   # musique sur une piste liée (FCPXML)
 
 
+class AutotrimRequest(BaseModel):
+    """Coupe blancs + hésitations d'un rush audio/vidéo."""
+    path: str
+    min_silence: float = 0.35     # durée minimale d'un silence à couper (s)
+    keep_silence: float = 0.10     # silence conservé aux bords de coupe (s)
+    top_db: float = 35.0           # seuil de silence (dB sous le maximum)
+    enable_fillers: bool = True    # détecter « euh… » via Whisper
+    device: str = "auto"           # auto | gpu | cpu
+
+
+class ScriptCheckRequest(BaseModel):
+    """Vérifie qu'un script est dit correctement sur un rush."""
+    path: str
+    script: str
+    device: str = "auto"
+
+
 def _rhythm_sources(video_path: str, audio_path: str) -> tuple[dict, dict]:
     """Valide les deux sources et retourne leurs infos ffprobe."""
     video_path = os.path.abspath(str(video_path or ""))
@@ -1524,10 +1811,73 @@ async def davinci_install(req: DavinciInstallRequest):
             detail=f"Écriture impossible dans le dossier Scripts : {e}"
         )
 
-    info.update({
-        "markers": len(beats),
-        "source": os.path.basename(path),
-        "ranks": req.ranks,
-        "resolve_installed": davinci.resolve_installed(),
-    })
-    return info
+# ── Hub « Coupe des blancs & hésitations » ───────────────────────────────
+@app.post("/api/autotrim/scan")
+async def autotrim_scan(req: AutotrimRequest):
+    """Analyse rapide d'un fichier (probe + estimation)."""
+    path = os.path.abspath(str(req.path or ""))
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
+    from app.media import probe
+    info = probe(path)
+    duration = float(info.get("duration") or 0.0)
+    # Ratio grossier : 0.5 pour la transcription Whisper + 2× realtime pour le rendu
+    estimate = estimates.estimate("autotrim", "default", duration,
+                                 files=1) if False else None
+    try:
+        estimate = estimates.estimate("convert", "resolve:sq", duration,
+                                      files=1)
+    except Exception:  # noqa: BLE001
+        estimate = None
+    return {
+        "path": path,
+        "name": os.path.basename(path),
+        "duration": round(duration, 3),
+        "size": info.get("size", 0),
+        "has_video": bool(info.get("has_video")),
+        "estimate": estimate,
+    }
+
+
+@app.post("/api/autotrim/start")
+async def autotrim_start(req: AutotrimRequest):
+    busy = _running_job("autotrim")
+    if busy:
+        raise HTTPException(status_code=409,
+                            detail=f"Un traitement est déjà en cours (job {busy}).")
+    jid = create_job("autotrim", req.model_dump(),
+                     estimate={"seconds": 30, "human": "30 s"})
+    _claim_slot("autotrim", jid)
+    threading.Thread(target=_run_autotrim_job, args=(jid,), daemon=True).start()
+    return {"id": jid}
+
+
+
+# ── Hub « Vérification de script » ─────────────────────────────────────────
+@app.post("/api/scriptcheck/scan")
+async def scriptcheck_scan(req: ScriptCheckRequest):
+    path = os.path.abspath(str(req.path or ""))
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
+    from app.media import probe
+    info = probe(path)
+    duration = float(info.get("duration") or 0.0)
+    return {
+        "path": path,
+        "name": os.path.basename(path),
+        "duration": round(duration, 3),
+        "script_word_count": len(req.script.split()),
+    }
+
+
+@app.post("/api/scriptcheck/start")
+async def scriptcheck_start(req: ScriptCheckRequest):
+    busy = _running_job("scriptcheck")
+    if busy:
+        raise HTTPException(status_code=409,
+                            detail=f"Un traitement est déjà en cours (job {busy}).")
+    jid = create_job("scriptcheck", req.model_dump(),
+                     estimate={"seconds": 30, "human": "30 s"})
+    _claim_slot("scriptcheck", jid)
+    threading.Thread(target=_run_scriptcheck_job, args=(jid,), daemon=True).start()
+    return {"id": jid}

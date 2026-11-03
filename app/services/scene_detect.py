@@ -100,6 +100,13 @@ def _detect(video_path, threshold, min_scene_len, downscale_factor,
     for start_tc, end_tc in scene_list:
         start_s = start_tc.seconds if hasattr(start_tc, "seconds") else start_tc.get_seconds()
         end_s = end_tc.seconds if hasattr(end_tc, "seconds") else end_tc.get_seconds()
+        # Garde-fou : ne jamais dépasser la durée lue.
+        if start_s < 0:
+            start_s = 0.0
+        if end_s > duration_s and duration_s > 0:
+            end_s = duration_s
+        if end_s - start_s < 1.0 / max(fps, 1.0) - 1e-9:
+            continue
         cuts.append({
             "start": round(start_s, 3),
             "end": round(end_s, 3),
@@ -107,6 +114,23 @@ def _detect(video_path, threshold, min_scene_len, downscale_factor,
             "end_tc": seconds_to_edl_timecode(end_s, fps),
             "duration": round(end_s - start_s, 3),
         })
+
+    # Dernier plan : si la dernière détection laisse au moins 1 frame jusqu'à la
+    # fin, on ajoute un plan « queue » pour ne pas perdre la fin du média.
+    if cuts and duration_s and duration_s > 0:
+        last_end = float(cuts[-1]["end"])
+        remaining_frames = int(round((duration_s - last_end) * fps))
+        if remaining_frames >= 1:
+            tail_start = last_end
+            tail_end = duration_s
+            if tail_end - tail_start >= 1.0 / max(fps, 1.0) - 1e-9:
+                cuts.append({
+                    "start": round(tail_start, 3),
+                    "end": round(tail_end, 3),
+                    "start_tc": seconds_to_edl_timecode(tail_start, fps),
+                    "end_tc": seconds_to_edl_timecode(tail_end, fps),
+                    "duration": round(tail_end - tail_start, 3),
+                })
 
     return cuts, fps
 
@@ -138,7 +162,27 @@ def detect_scenes(video_path, threshold=30.0, min_scene_len=15,
                         progress_cb=progress_cb, cancel_event=cancel_event)
     elapsed = time.time() - t0
 
-    # Durée totale de la vidéo
+    # Durée totale de la vidéo (probe pour la précision)
+    try:
+        from app.media import probe as _probe
+        _info = _probe(video_path)
+        video_duration = float((_info or {}).get("duration") or 0.0)
+    except Exception:
+        video_duration = 0.0
+    if video_duration <= 0 and cuts:
+        video_duration = float(cuts[-1]["end"])
+
+    # Si aucune coupe détectée : un seul plan couvrant toute la vidéo.
+    if not cuts and video_duration > 0:
+        from app.utils import seconds_to_edl_timecode
+        cuts = [{
+            "start": 0.0,
+            "end": round(video_duration, 3),
+            "start_tc": seconds_to_edl_timecode(0.0, fps),
+            "end_tc": seconds_to_edl_timecode(video_duration, fps),
+            "duration": round(video_duration, 3),
+        }]
+
     total_duration = cuts[-1]["end"] if cuts else 0.0
 
     return {

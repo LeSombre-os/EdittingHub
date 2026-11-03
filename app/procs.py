@@ -80,6 +80,17 @@ def _signal_group(proc: subprocess.Popen, sig: int) -> bool:
         return False
 
 
+def nice_cmd(cmd: list[str]) -> list[str]:
+    """Préfixe `nice` : le sous-processus cède le pas au reste du système.
+
+    Les enfants (ffmpeg, whisper) héritent de la priorité, donc un encodage
+    DNxHR ne rend pas le bureau inutilisable.
+    """
+    from app import runtime
+
+    return runtime.nice_prefix() + list(cmd)
+
+
 def iter_lines(proc: subprocess.Popen, cancel_event=None, poll: float = 0.2,
                on_cancel=None):
     """Itère sur stdout sans jamais bloquer indéfiniment.

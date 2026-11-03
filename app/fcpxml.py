@@ -204,10 +204,20 @@ def _append_cut_clips(spine, video_path: str, fps: float, cuts,
     offset_frames = 0
     for index, cut in enumerate(cuts):
         start_frames = _frames(float(cut.get("start") or 0.0), fps)
-        dur_frames = max(1, _frames(float(cut.get("duration") or 0.0), fps))
-        # Ne jamais dépasser le média source
-        if asset_duration and (start_frames + dur_frames) > _frames(asset_duration, fps):
-            dur_frames = max(1, _frames(asset_duration, fps) - start_frames)
+        raw_dur = float(cut.get("duration") or 0.0)
+        if raw_dur <= 0 or raw_dur < 1.0 / max(fps, 1.0):
+            # Plan trop court / invalide → ignoré (Resolve plante sur
+            # les asset-clip à durée nulle ou sous-frame).
+            continue
+        dur_frames = max(1, _frames(raw_dur, fps))
+        last_frame = _frames(asset_duration, fps)
+        if asset_duration and last_frame > 0 and start_frames >= last_frame:
+            # In-point au-delà du média : plan invalide, on l'ignore.
+            continue
+        if asset_duration and last_frame > 0 and (start_frames + dur_frames) > last_frame:
+            dur_frames = max(1, last_frame - start_frames)
+        if dur_frames < 1:
+            continue
         ET.SubElement(spine, "asset-clip", {
             "ref": "r2",
             "offset": _time(offset_frames, fps),
@@ -216,6 +226,9 @@ def _append_cut_clips(spine, video_path: str, fps: float, cuts,
             "name": f"{os.path.splitext(os.path.basename(video_path))[0]} — plan {index + 1}",
         })
         offset_frames += dur_frames
+    if offset_frames == 0:
+        # Aucun plan valide → rien à écrire (évite un fichier muet/crisp).
+        return 0
     return offset_frames
 
 
@@ -241,6 +254,21 @@ def cuts_document(video_path: str, fps: float, cuts, title: str | None = None) -
     sequence = root.find("./library/event/project/sequence")
     offset_frames = _append_cut_clips(spine, video_path, fps, cuts,
                                       asset_duration)
+
+    # Aucun plan valide (cut list vide / plan à durée nulle) : au lieu d'un
+    # spine vide (qui pose problème à Resolve et casse l'import), on exporte
+    # au moins le média complet sur un seul clip. Verrouille l'effet de bord
+    # pour les détections où le seuil était trop haut.
+    if offset_frames == 0:
+        durFrames = max(1, _frames(asset_duration if asset_duration else total if total else 1.0, fps))
+        ET.SubElement(spine, "asset-clip", {
+            "ref": "r2",
+            "offset": "0s",
+            "start": "0s",
+            "duration": _time(durFrames, fps),
+            "name": os.path.splitext(os.path.basename(video_path))[0],
+        })
+        offset_frames = durFrames
 
     if sequence is not None:
         sequence.set("duration", _time(offset_frames or _frames(total, fps), fps))

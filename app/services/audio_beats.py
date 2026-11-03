@@ -160,6 +160,7 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
 
     # 2. Grille de beats (PLP) - temps principaux
     grid = np.sort(np.asarray(beat_times, dtype=float)) if beat_times is not None else np.array([])
+    meter = 4
     period = 60.0 / float(np.median(grid[1:] - grid[:-1])) if len(grid) > 1 else 60.0 / 120.0
 
     # 3. Pour chaque temps de grille, trouver l'attaque fine la plus proche (±80ms)
@@ -197,7 +198,6 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
     ratio_peaks, _ = find_peaks(ratios, distance=int(0.06 * fps), prominence=0.8, height=1.5)
     for pk in ratio_peaks:
         pk_time = pk / fps
-        pk_time = pk / fps
         pk_ratio = float(ratios[pk])
 
         # Vérifier si près d'un temps de grille principal
@@ -218,8 +218,37 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
 
         off_grid_beats.append((pk_time, onset_strength))
 
+    # 5bis. Combler les trous (beats manquants) : toute pause > 1.6×period
+    # reçoit un beat synthétique de basse énergie pour éviter les silences
+    # (rang 3 ou pire) — sans inventer de rang 1.
+    filled = []
+    if len(main_beats) >= 2 and period > 0:
+        main_sorted = sorted(main_beats, key=lambda x: x[0])
+        min_strength = min((s for _, s in main_sorted), default=0.0) or 0.0
+        cap = 0.35 * max(min_strength, 1e-6)
+        max_gap = period * 1.6
+        for (t0, s0), (t1, s1) in zip(main_sorted, main_sorted[1:]):
+            gap = t1 - t0
+            if gap <= max_gap or gap > max_gap * 3.0:
+                continue
+            # insérer un point par période à l'intérieur
+            n = int(round(gap / period)) - 1
+            for k in range(1, n + 1):
+                gt = t0 + k * period
+                if gt < 0 or gt > (y.shape[0] / float(sr)):
+                    break
+                # énergie = min des voisins * 0.5 (sous le threshold de rang 1)
+                filled.append((round(float(gt), 4), cap * 0.7))
+    # éviter les doublons trop proches des beats principaux
+    def _too_close(t, srcs, tol=0.05):
+        return any(abs(t - b[0]) < tol for b in srcs)
+    for fb in filled:
+        if _too_close(fb[0], main_beats, 0.05) or _too_close(fb[0], off_grid_beats, 0.05):
+            continue
+        # L'agrégation finale (à la ligne suivante) applique déjà ce filtre.
+
     # 5. Combiner et trier
-    all_beats = main_beats + off_grid_beats
+    all_beats = main_beats + off_grid_beats + [b for b in filled if not _too_close(b[0], main_beats + off_grid_beats, 0.05)]
     all_beats.sort(key=lambda x: x[0])
 
     # 6. Extraire temps et forces
@@ -306,6 +335,9 @@ def _load_audio(audio_path, sr=DEFAULT_AUDIO_SR, cancel_event=None):
     import time as _time
 
     # Étape 1 : extraire/convertir l'audio en WAV temporaire
+    import numpy as np
+    from app.errors import JobCancelled
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
     try:
@@ -431,6 +463,18 @@ def _compute_onsets(y, sr):
     #    onsets sont à moins de 45 ms l'un de l'autre.
     times, strengths = _dedup_onsets(times, strengths, 0.045)
 
+    # Rejet des « faux onsets » : transitoires sans réelle attaque (hum /
+    # souffle / voix). Étiquette analyse, ne dégrade pas si rien ne passe.
+    if times.size > 0 and y.size > 0:
+        try:
+            t_arr, s_arr = _filter_weak_onsets(
+                y, sr, times.tolist(), strengths.tolist(),
+                min_ratio=1.6, min_strength=float(np.median(strengths)) * 0.5)
+            if t_arr.size >= max(1, times.size // 4):
+                times, strengths = t_arr, s_arr
+        except Exception:  # noqa: BLE001 — le filtre reste facultatif
+            pass
+
     return onset_env, np.asarray(times, dtype=float), np.asarray(strengths, dtype=float)
 
 
@@ -494,17 +538,21 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
     - Ensuite classifier ceux-ci en 3 rangs selon leur énergie locale et position rythmique
     """
     import numpy as np
-
     if len(onset_times) == 0:
         return []
 
     strengths = np.asarray(onset_strengths, dtype=np.float64)
     times = np.asarray(onset_times, dtype=np.float64)
 
-    # Seuils locaux (fenêtre ~100 trames ≈ 5-6s à hop=128)
-    window = min(100, max(10, len(strengths) // 3))
-    p1_local = _local_percentile(strengths, window, DEFAULT_RANK1_PERCENTILE)
-    p2_local = _local_percentile(strengths, window, DEFAULT_RANK2_PERCENTILE)
+    # Seuils locaux en TEMPS, pas en index d'onset (8 s glissants).
+    if len(times) >= 2:
+        ioi = np.median(np.diff(np.sort(times)))
+        window_onsets = int(round(8.0 / max(float(ioi), 1e-3) / 2.0))
+    else:
+        window_onsets = 10
+    window_onsets = int(np.clip(window_onsets, 15, max(15, len(strengths) // 2)))
+    p1_local = _local_percentile(strengths, window_onsets, DEFAULT_RANK1_PERCENTILE)
+    p2_local = _local_percentile(strengths, window_onsets, DEFAULT_RANK2_PERCENTILE)
 
     # Seuils globaux en repli
     p1_global = float(np.percentile(strengths, DEFAULT_RANK1_PERCENTILE))
@@ -512,6 +560,7 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
 
     # Grille de beats (PLP)
     grid = np.sort(np.asarray(beat_times, dtype=float)) if beat_times is not None else np.array([])
+    meter = 4
     period = 60.0 / tempo if tempo > 0 else 0.0
 
     # Fenêtre de tolérance sur la grille : 8% de la période (≈45ms à 108 BPM)
@@ -583,7 +632,7 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
                 score += 0.25
         
         # Seuil pour considérer comme un beat candidat - abaissé pour être plus inclusif
-        if score >= 0.35:  # Seuil réduit davantage pour capturer plus de potentiels beats
+        if score >= 0.40:  # seuil relevé (0.35→0.40) pour réduire les faux positifs (« en trop »)
             beat_candidates.append((i, score))
     
     # S'assurer d'avoir au moins quelques beats si on trouve quelque chose
@@ -631,27 +680,37 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
                         on_grid = True
                         break
 
-        # 5. Ajustement de rang selon position rythmique
+        # 5. Ajustement de rang selon position rythmique. On ne déclasse que si
+        # l'énergie est INSUFFISANTE pour le rang attribué — sinon on conserve
+        # (le bug précédent déclassait systématiquement les syncopations : un
+        # accent hors grille à +6 dB finissait en rang 2, d'où les « mal notés »).
         if on_grid:
-            # Sur la grille principale : on assure au minimum le rang 2 si énergie suffisante
-            if rank == 3 and s >= min_strength_for_beat:
+            if rank == 3 and s >= min_strength_for_beat * 1.0:
                 rank = 2
-            # Rang 1 seulement si vraiment fort localement
-            elif rank == 2 and s >= p1:
-                rank = 1
         else:
-            # Hors grille : seul un coup très fort (syncopation marquée) peut être rang 2
-            if rank == 1 and s < p1 * 1.3:  # pas assez fort pour être "fort hors grille"
+            if rank == 1 and s < p1 * 1.15:
                 rank = 2
-            elif rank == 2 and s < p2 * 1.2:
+            elif rank == 2 and s < p2 * 1.1:
                 rank = 3
 
+        # Downbeat : phase 0 du mètre (uniquement indicative, n'affecte pas le rang)
+        is_downbeat = False
+        if grid.size > 0 and period > 0:
+            idx_grid = int(np.searchsorted(grid, float(t)))
+            ii = max(0, min(grid.size - 1, idx_grid - (1 if (idx_grid > 0 and grid[idx_grid - 1] > t or idx_grid >= grid.size) else 0)))
+            nearest = grid[ii] if grid.size else None
+            if nearest is not None:
+                # index dans la grille du beat le plus proche
+                idx_near = int(np.argmin(np.abs(grid - float(t)))) if grid.size else -1
+                if idx_near >= 0 and period > 0:
+                    is_downbeat = (idx_near % meter) == 0
         beats.append({
             "time": round(float(t), 3),
             "energy": round(float(s), 4),
             "rank": rank,
             "color": RANK_COLORS.get(rank, "White"),
             "label": {1: "Impact fort", 2: "Intermédiaire", 3: "Micro-variation"}[rank],
+            "is_downbeat": bool(is_downbeat),
         })
     return beats
 
@@ -709,39 +768,9 @@ def analyze_audio(audio_path, sr=DEFAULT_AUDIO_SR, progress_cb=None,
     beat_times_final, strengths_final, period, grid = _build_beat_markers(
         y, sr_actual, onset_env, onset_times, onset_strengths, beat_times, hop
     )
-    
-    # TEMP DEBUG: Let's see what onsets we have
-    print(f"DEBUG: {len(onset_times)} onsets detected")
-    for i, (t, s) in enumerate(zip(onset_times[:20], onset_strengths[:20])):
-        print(f"  onset {t:.3f} strength={s:.3f}")
-    
-    # TEMP: Let's see what the old approach would give us
-    from app.services.audio_beats import _estimate_tempo_sr as est_tempo, _classify_beats
-    tempo, beat_times, _plp = est_tempo(onset_env, sr_actual, hop)
-    print(f"DEBUG: Tempo from PLP: {tempo:.1f}")
-    print(f"DEBUG: Beat grid from PLP: {len(beat_times)} points")
-    
-    # Classify using the old method
-    beats_old = _classify_beats(onset_times, onset_strengths, tempo, sr_actual, 
-                               beat_times=beat_times, hop=hop)
-    print(f"DEBUG: Old approach gave {len(beats_old)} beats:")
-    for b in beats_old[:15]:
-        print(f"  {b['time']:.3f} rank={b['rank']} energy={b['energy']:.3f}")
-        
-    # Return early to avoid duplicate processing
-    return {
-        "status": "done",
-        "beats": beats_old,
-        "tempo": round(tempo, 1),
-        "duration": round(duration, 3),
-        "total_onsets": len(onset_times),
-        "total_beats": len(beats_old),
-        "ranks": {
-            1: sum(1 for b in beats_old if b["rank"] == 1),
-            2: sum(1 for b in beats_old if b["rank"] == 2),
-            3: sum(1 for b in beats_old if b["rank"] == 3),
-        },
-    }
+    if beat_times_final is None or len(beat_times_final) == 0:
+        beat_times_final = onset_times.copy()
+        strengths_final = onset_strengths.copy()
 
     # Recalage manuel (décalage de projet)
     if offset:
