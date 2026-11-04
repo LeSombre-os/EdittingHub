@@ -51,6 +51,18 @@ DEFAULTS: dict[str, dict[str, float]] = {
     "audio": {
         "default": 0.045,
     },
+    # Coupe des blancs : silences + ASR + rendu (1 passe x264)
+    "autotrim": {
+        "gpu": 0.35,
+        "cpu": 0.60,
+        "default": 0.60,
+    },
+    # Vérification de script : ASR + alignement difflib
+    "scriptcheck": {
+        "gpu": 0.06,
+        "cpu": 0.20,
+        "default": 0.20,
+    },
 }
 
 # Coût fixe par fichier (ouverture, extraction, écriture)
@@ -59,6 +71,8 @@ OVERHEAD = {
     "subtitles": 2.0,
     "scenes": 0.6,
     "audio": 1.2,
+    "autotrim": 4.0,
+    "scriptcheck": 3.0,
 }
 
 

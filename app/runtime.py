@@ -262,6 +262,10 @@ def gpu_available() -> bool:
     return bool(gpu_stats())
 
 
+_SNAP_LOCK = threading.Lock()
+_SNAP: tuple[float, dict] = (0.0, {})
+
+
 _WHISPER_GPU: bool | None = None
 _WHISPER_LOCK = threading.Lock()
 
@@ -295,12 +299,24 @@ def whisper_gpu_available() -> bool:
         return _WHISPER_GPU
 
 
-def system_snapshot() -> dict:
-    """Photo complète pour /api/system et la barre d'état de l'UI."""
+def system_snapshot(ttl: float = 1.0) -> dict:
+    """Photo complète pour /api/system et la barre d'état de l'UI.
+
+    Mémoïsée `ttl` secondes : `/api/jobs` (900 ms), `/api/system` (3 s) et le
+    ping (10 s) demandaient la même photo en parallèle, soit 3 lectures de
+    /proc + /sys par seconde pour rien.
+    """
+    global _SNAP
+    now = time.time()
+    with _SNAP_LOCK:
+        ts, snap = _SNAP
+        if snap and now - ts < ttl:
+            return snap
+
     mem = memory()
     loads = load_average()
     gpus = gpu_stats()
-    return {
+    snap = {
         "cpu": {
             "percent": cpu_percent(),
             "count": CPU_COUNT,
@@ -314,8 +330,11 @@ def system_snapshot() -> dict:
         "gpu_detected": bool(gpus),
         "whisper_gpu": _WHISPER_GPU,
         "nice": NICE_LEVEL,
-        "timestamp": round(time.time(), 3),
+        "timestamp": round(now, 3),
     }
+    with _SNAP_LOCK:
+        _SNAP = (now, snap)
+    return snap
 
 
 # Applique la limite dès l'import : le serveur importe ce module avant

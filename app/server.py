@@ -64,10 +64,15 @@ app = FastAPI(
     title="EdittingHub",
     description="Hub local 100% offline pour montage vidéo — conversion, "
                 "sous-titrage, détection de plans, analyse audio.",
-    version="1.4.0",
+    version="1.5.0",
     docs_url=None,  # désactive l'UI Swagger (UI custom)
     redoc_url=None,
 )
+
+# Sonde GPU Whisper lancée en tâche de fond : le premier import de torch ROCm
+# prend plusieurs secondes et bloquait la première requête qui en dépendait.
+threading.Thread(target=runtime.whisper_gpu_available, daemon=True,
+                 name="whisper-gpu-probe").start()
 
 # Monte les fichiers statiques
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -106,17 +111,6 @@ MODULE_HW = {
     "rhythm": "cpu",
     "autotrim": "cpu",
     "scriptcheck": "cpu",
-}
-
-# Matériel utilisé par défaut (surchargé au lancement si le GPU est en jeu)
-MODULE_HW = {
-    "convert": "cpu",
-    "subtitles": "cpu",
-    "scenes": "cpu",
-    "audio": "cpu",
-    "rhythm": "cpu",
-    "autotrim": "cpu",
-    "scriptcheck": "cpu/gpu",
 }
 
 
@@ -747,6 +741,8 @@ def _run_scene_job(job_id: int):
     except Exception as e:
         update_job(job_id, status="error", error=str(e), ended=time.time())
         append_log(job_id, f"[ERREUR] {e}")
+    finally:
+        _release_slot("scenes", job_id)
 
 
 def _run_audio_job(job_id: int):
@@ -855,6 +851,8 @@ def _run_audio_job(job_id: int):
     except Exception as e:
         update_job(job_id, status="error", error=str(e), ended=time.time())
         append_log(job_id, f"[ERREUR] {e}")
+    finally:
+        _release_slot("audio", job_id)
 
 
 def _run_rhythm_job(job_id: int):
@@ -976,6 +974,8 @@ def _run_rhythm_job(job_id: int):
     except Exception as e:
         update_job(job_id, status="error", error=str(e), ended=time.time())
         append_log(job_id, f"[ERREUR] {e}")
+    finally:
+        _release_slot("rhythm", job_id)
 
 
 def _run_autotrim_job(job_id: int):
@@ -985,16 +985,16 @@ def _run_autotrim_job(job_id: int):
         return
     cfg = job["config"]
     src = os.path.abspath(str(cfg.get("path") or ""))
+    from app.services.asr import backend as asr_backend
     from app.services.autotrim import analyze_and_trim
 
-    is_video = any(src.lower().endswith(e) for e in (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm", ".mts", ".m2ts"))
-    hw = "gpu" if (cfg.get("device", "auto") != "cpu"
-                    and runtime.whisper_gpu_available()) else "cpu"
+    device = cfg.get("device", "auto")
+    hw = "gpu" if asr_backend(device)[1] == "gpu" else "cpu"
     set_activity(job_id, hw=hw, label="Coupe des blancs · détection")
 
     def _cb(frac, label):
         if job.get("_cancel").is_set():
-            raise RuntimeError("Annulé.")
+            raise JobCancelled("Annulé.")
         update_job(job_id, progress=round(float(frac), 4),
                    label=str(label) if label else None)
         if label:
@@ -1012,20 +1012,23 @@ def _run_autotrim_job(job_id: int):
                 enable_fillers=bool(cfg.get("enable_fillers", True)),
                 progress_cb=_cb,
                 cancel_event=job.get("_cancel"),
-                device=cfg.get("device", "auto"),
+                device=device,
             )
         ended = time.time()
         update_job(job_id, status="done", result=result, progress=1.0,
                    label="Terminé", ended=ended)
         append_log(job_id, f"Terminé : {result['output_duration']}s "
                            f"({result['removed_pct']} % supprimés) → {result['output']}")
+        estimates.record("autotrim", hw,
+                         float(result.get("input_duration") or 0.0),
+                         ended - (job.get("started") or ended))
+    except JobCancelled as e:
+        update_job(job_id, status="cancelled", ended=time.time(),
+                   error=None, label="Annulé")
+        append_log(job_id, f"[ANNULÉ] {e}")
     except Exception as e:
-        if (job.get("_cancel").is_set() if job else False):
-            update_job(job_id, status="cancelled", ended=time.time(),
-                       error=None, label="Annulé")
-        else:
-            update_job(job_id, status="error", error=str(e), ended=time.time(),
-                       label="Erreur")
+        update_job(job_id, status="error", error=str(e), ended=time.time(),
+                   label="Erreur")
         append_log(job_id, f"[ERREUR] {e}")
     finally:
         _release_slot("autotrim", job_id)
@@ -1073,7 +1076,7 @@ async def system():
     Alimente la barre d'état de l'UI : on voit si la machine est déjà chargée
     avant de lancer un traitement, et quel matériel un job utilise.
     """
-    snap = runtime.system_snapshot()
+    snap = dict(runtime.system_snapshot())
     # Compatibilité avec l'ancien format (cpu_load / memory / swap / gpu)
     snap["cpu_load"] = snap["cpu"]["load"]
     snap["threads"] = runtime.thread_state()
@@ -1137,7 +1140,6 @@ async def ls_files(path: str = ""):
     return result
 
 
-# 5. Sélecteur NATIF (zenity) — « Parcourir » ouvre le vrai explorateur
 def _run_scriptcheck_job(job_id: int):
     """Thread de vérification script."""
     job = get_job(job_id)
@@ -1146,16 +1148,16 @@ def _run_scriptcheck_job(job_id: int):
     cfg = job["config"]
     src = os.path.abspath(str(cfg.get("path") or ""))
     script_text = cfg.get("script", "")
+    from app.services.asr import backend as asr_backend
     from app.services.scriptcheck import check_script
 
-    from app.config import SUBTITLES_PYTHON_GPU
-    _gpu = SUBTITLES_PYTHON_GPU and os.path.isfile(str(SUBTITLES_PYTHON_GPU))
-    hw = "gpu" if (cfg.get("device", "auto") != "cpu" and _gpu) else "cpu"
+    device = cfg.get("device", "auto")
+    hw = "gpu" if asr_backend(device)[1] == "gpu" else "cpu"
     set_activity(job_id, hw=hw, label="Vérification de script")
 
     def _cb(frac, label):
         if job.get("_cancel").is_set():
-            raise RuntimeError("Annulé.")
+            raise JobCancelled("Annulé.")
         update_job(job_id, progress=round(float(frac), 4), label=str(label) if label else None)
         if label:
             append_log(job_id, str(label))
@@ -1164,24 +1166,27 @@ def _run_scriptcheck_job(job_id: int):
         with heavy_slot(job_id):
             update_job(job_id, status="running", started=time.time())
             result = check_script(src, script_text, progress_cb=_cb,
-                                 cancel_event=job.get("_cancel"),
-                                 device=cfg.get("device", "auto"))
+                                  cancel_event=job.get("_cancel"),
+                                  device=device)
         ended = time.time()
         update_job(job_id, status="done", result=result, progress=1.0,
                    label="Terminé", ended=ended)
         append_log(job_id, f"Terminé : couverture {result.get('coverage_pct')} %")
+        estimates.record("scriptcheck", hw, float(probe(src).get("duration") or 0.0),
+                         ended - (job.get("started") or ended))
+    except JobCancelled as e:
+        update_job(job_id, status="cancelled", error=None, ended=time.time(),
+                   label="Annulé")
+        append_log(job_id, f"[ANNULÉ] {e}")
     except Exception as e:
-        if (job.get("_cancel").is_set() if job else False):
-            update_job(job_id, status="cancelled", error=None, ended=time.time(),
-                       label="Annulé")
-        else:
-            update_job(job_id, status="error", error=str(e), ended=time.time(),
-                       label="Erreur")
+        update_job(job_id, status="error", error=str(e), ended=time.time(),
+                   label="Erreur")
         append_log(job_id, f"[ERREUR] {e}")
     finally:
         _release_slot("scriptcheck", job_id)
 
 
+# 5. Sélecteur NATIF (zenity) — « Parcourir » ouvre le vrai explorateur
 def _zenity() -> Optional[str]:
     return shutil.which("zenity")
 
@@ -1379,6 +1384,11 @@ async def scenes_scan(req: SceneScanRequest):
 @app.post("/api/scenes/detect")
 async def scenes_detect(req: SceneRequest):
     """Démarre la détection de plans (lot) en arrière-plan."""
+    busy = _running_job("scenes")
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Une détection est déjà en cours (job {busy}).")
     paths = req.all_paths()
     if not paths:
         raise HTTPException(status_code=400, detail="Aucun chemin fourni.")
@@ -1394,6 +1404,7 @@ async def scenes_detect(req: SceneRequest):
     est = estimates.estimate("scenes", _scene_key(req.downscale_factor),
                              total, files=len(files))
     jid = create_job("scenes", payload, estimate=est)
+    _claim_slot("scenes", jid)
     threading.Thread(target=_run_scene_job, args=(jid,), daemon=True).start()
     return {"id": jid, "estimate": est, "count": len(files)}
 
@@ -1478,6 +1489,11 @@ async def audio_scan(req: AudioScanRequest):
 @app.post("/api/audio/analyze")
 async def audio_analyze(req: AudioRequest):
     """Démarre l'analyse de beats audio (lot) en arrière-plan."""
+    busy = _running_job("audio")
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Une analyse est déjà en cours (job {busy}).")
     paths = req.all_paths()
     if not paths:
         raise HTTPException(status_code=400, detail="Aucun chemin fourni.")
@@ -1492,6 +1508,7 @@ async def audio_analyze(req: AudioRequest):
     total = sum(float(probe(f).get("duration") or 0.0) for f in files)
     est = estimates.estimate("audio", "default", total, files=len(files))
     jid = create_job("audio", payload, estimate=est)
+    _claim_slot("audio", jid)
     threading.Thread(target=_run_audio_job, args=(jid,), daemon=True).start()
     return {"id": jid, "estimate": est, "count": len(files)}
 
@@ -1658,6 +1675,11 @@ async def rhythm_scan(req: RhythmScanRequest):
 @app.post("/api/rhythm/start")
 async def rhythm_start(req: RhythmRequest):
     """Lance l'analyse des beats + le calcul du montage (job)."""
+    busy = _running_job("rhythm")
+    if busy:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Un montage est déjà en cours (job {busy}).")
     vinfo, ainfo = _rhythm_sources(req.video_path, req.audio_path)
 
     ranks = sorted({int(r) for r in (req.ranks or []) if int(r) in (1, 2, 3)})
@@ -1681,6 +1703,7 @@ async def rhythm_start(req: RhythmRequest):
     audio_duration = float(ainfo.get("duration") or 0.0)
     est = estimates.estimate("audio", "default", audio_duration, files=1)
     jid = create_job("rhythm", payload, estimate=est)
+    _claim_slot("rhythm", jid)
     threading.Thread(target=_run_rhythm_job, args=(jid,), daemon=True).start()
     return {
         "id": jid,
@@ -1797,6 +1820,11 @@ async def davinci_install(req: DavinciInstallRequest):
     beats = entry.get("beats", [])
     if req.ranks is not None:
         beats = [b for b in beats if int(b.get("rank") or 0) in req.ranks]
+    if not beats:
+        raise HTTPException(
+            status_code=409,
+            detail="Aucun beat pour les rangs sélectionnés.",
+        )
 
     content = export_markers(beats, fps=req.fps, fmt="davinci_script",
                              title=f"{name}_beats", asset_path=path,
@@ -1810,31 +1838,44 @@ async def davinci_install(req: DavinciInstallRequest):
             status_code=500,
             detail=f"Écriture impossible dans le dossier Scripts : {e}"
         )
+    # Le frontend lit `markers`, `path`, `menu_label`, `restart_needed` et
+    # `resolve_running` : sans ce return, l'endpoint renvoyait `null`.
+    return {
+        **info,
+        "markers": len(beats),
+        "fps": req.fps,
+        "file_index": index,
+        "source": os.path.basename(path),
+    }
 
 # ── Hub « Coupe des blancs & hésitations » ───────────────────────────────
+def _trim_key(device: str) -> str:
+    """Clé d'estimation : GPU seulement si l'ASR peut vraiment l'utiliser."""
+    from app.services.asr import backend as asr_backend
+
+    return "gpu" if asr_backend(device)[1] == "gpu" else "cpu"
+
+
 @app.post("/api/autotrim/scan")
 async def autotrim_scan(req: AutotrimRequest):
     """Analyse rapide d'un fichier (probe + estimation)."""
     path = os.path.abspath(str(req.path or ""))
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
-    from app.media import probe
     info = probe(path)
+    if not info.get("has_audio"):
+        raise HTTPException(status_code=400,
+                            detail="Ce fichier ne contient aucune piste audio.")
     duration = float(info.get("duration") or 0.0)
-    # Ratio grossier : 0.5 pour la transcription Whisper + 2× realtime pour le rendu
-    estimate = estimates.estimate("autotrim", "default", duration,
-                                 files=1) if False else None
-    try:
-        estimate = estimates.estimate("convert", "resolve:sq", duration,
-                                      files=1)
-    except Exception:  # noqa: BLE001
-        estimate = None
+    estimate = estimates.estimate("autotrim", _trim_key(req.device), duration,
+                                  files=1)
     return {
         "path": path,
         "name": os.path.basename(path),
         "duration": round(duration, 3),
         "size": info.get("size", 0),
         "has_video": bool(info.get("has_video")),
+        "has_audio": bool(info.get("has_audio")),
         "estimate": estimate,
     }
 
@@ -1845,11 +1886,19 @@ async def autotrim_start(req: AutotrimRequest):
     if busy:
         raise HTTPException(status_code=409,
                             detail=f"Un traitement est déjà en cours (job {busy}).")
-    jid = create_job("autotrim", req.model_dump(),
-                     estimate={"seconds": 30, "human": "30 s"})
+    path = os.path.abspath(str(req.path or ""))
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
+    info = probe(path)
+    if not info.get("has_audio"):
+        raise HTTPException(status_code=400,
+                            detail="Ce fichier ne contient aucune piste audio.")
+    est = estimates.estimate("autotrim", _trim_key(req.device),
+                             float(info.get("duration") or 0.0), files=1)
+    jid = create_job("autotrim", req.model_dump(), estimate=est)
     _claim_slot("autotrim", jid)
     threading.Thread(target=_run_autotrim_job, args=(jid,), daemon=True).start()
-    return {"id": jid}
+    return {"id": jid, "estimate": est}
 
 
 
@@ -1859,14 +1908,21 @@ async def scriptcheck_scan(req: ScriptCheckRequest):
     path = os.path.abspath(str(req.path or ""))
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
-    from app.media import probe
     info = probe(path)
+    if not info.get("has_audio"):
+        raise HTTPException(status_code=400,
+                            detail="Ce fichier ne contient aucune piste audio.")
     duration = float(info.get("duration") or 0.0)
+    if not (req.script or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="Script vide — fournir un texte de référence.")
     return {
         "path": path,
         "name": os.path.basename(path),
         "duration": round(duration, 3),
         "script_word_count": len(req.script.split()),
+        "estimate": estimates.estimate("scriptcheck", _trim_key(req.device),
+                                       duration, files=1),
     }
 
 
@@ -1876,8 +1932,19 @@ async def scriptcheck_start(req: ScriptCheckRequest):
     if busy:
         raise HTTPException(status_code=409,
                             detail=f"Un traitement est déjà en cours (job {busy}).")
-    jid = create_job("scriptcheck", req.model_dump(),
-                     estimate={"seconds": 30, "human": "30 s"})
+    path = os.path.abspath(str(req.path or ""))
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Fichier introuvable : {path}")
+    if not (req.script or "").strip():
+        raise HTTPException(status_code=400,
+                            detail="Script vide — fournir un texte de référence.")
+    info = probe(path)
+    if not info.get("has_audio"):
+        raise HTTPException(status_code=400,
+                            detail="Ce fichier ne contient aucune piste audio.")
+    est = estimates.estimate("scriptcheck", _trim_key(req.device),
+                             float(info.get("duration") or 0.0), files=1)
+    jid = create_job("scriptcheck", req.model_dump(), estimate=est)
     _claim_slot("scriptcheck", jid)
     threading.Thread(target=_run_scriptcheck_job, args=(jid,), daemon=True).start()
-    return {"id": jid}
+    return {"id": jid, "estimate": est}

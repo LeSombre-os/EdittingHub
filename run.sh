@@ -8,8 +8,14 @@
 cd "$(dirname "$0")"
 PORT=8005
 URL="http://127.0.0.1:$PORT"
-PY="/home/lesombre/.venvs/edittinghub/bin/python"
-if [ ! -x "$PY" ]; then
+# Cherche un venv utilisable (à côté du script, puis HOME/.venvs), sinon python3
+if [ -x "./.venv/bin/python" ]; then
+    PY="./.venv/bin/python"
+elif [ -x "./.venvs/edittinghub/bin/python" ]; then
+    PY="./.venvs/edittinghub/bin/python"
+elif [ -x "$HOME/.venvs/edittinghub/bin/python" ]; then
+    PY="$HOME/.venvs/edittinghub/bin/python"
+else
     PY="python3"
 fi
 

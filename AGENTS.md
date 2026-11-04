@@ -11,26 +11,31 @@ EdittingHub/
 ├── run.sh                    # Lanceur bash : démarre le serveur + ouvre le navigateur
 ├── stop.sh                   # Arrêt propre (évite le pkill qui tue le shell)
 ├── main.py                   # Point d'entrée Python (alternative à run.sh)
-├── tests/smoke.py            # 54+ tests de fumée (script DaVinci, FCPXML, exports, API, rythme)
+├── tests/smoke.py            # 74 tests de fumée (script DaVinci, FCPXML, exports, API, rythme)
+├── tests/smoke.py --api      # + tests HTTP (serveur sur 8005, 121 tests)
 ├── requirements.txt          # Dépendances Python
 ├── app/
 │   ├── config.py             # Configuration : chemins, constantes, vérif outils
 │   ├── utils.py              # Utilitaires : timecode, formatage, parsing
-│   ├── server.py             # Application FastAPI + routes API
+│   ├── server.py             # Application FastAPI + routes API (v1.5.0)
 │   ├── davinci.py            # Script marqueurs Resolve + installation menu Scripts
 │   ├── fcpxml.py             # FCPXML 1.9 (marqueurs beats, découpe de plans, montage rythme)
 │   ├── media.py              # ffprobe : durée, codecs, dimensions
 │   ├── procs.py              # Sous-processus + killpg (annulation réelle)
-│   ├── estimates.py          # Estimations de durée calibrées
+│   ├── estimates.py          # Estimations de durée calibrées (ajouté : autotrim, scriptcheck)
 │   ├── errors.py             # Exceptions métier (JobCancelled)
+│   ├── runtime.py            # Budget threads, priorité nice, sondes CPU/GPU, système_snapshot() mémoïsé 1 s
+│   ├── cache.py              # Cache disque des analyses coûteuses
 │   ├── services/
+│   │   ├── asr.py            # Transcription Whisper partagée (autotrim + ScriptCheck, worker dédié)
 │   │   ├── convert.py        # Hub Conversion  → subprocess vers ResolveConvert/convert.py
+│   │   ├── scriptcheck.py    # Hub ScriptCheck → ASR vs script de référence (difflib)
 │   │   ├── subtitles.py      # Hub Sous-titrage → subprocess vers ResolveSubs/transcrire.py
 │   │   ├── scene_detect.py   # Découpage plans → PySceneDetect (scenedetect 0.7.x)
-│   │   ├── audio_beats.py    # Analyse audio → Librosa 1.0
+│   │   ├── audio_beats.py    # Analyse audio → Librosa 1.0 (enveloppe fine partagée, vectorisée)
 │   │   └── rhythm.py         # Montage au rythme → coupes séquentielles, plan, exports
 │   └── static/
-│       ├── index.html        # Interface web (CSS inline + Vanilla JS, 0 CDN)
+│       ├── index.html        # Interface web (CSS inline + Vanilla JS, 0 CDN) (v1.5)
 │       └── icon.svg          # Icône du projet (en-tête web, favicon, menu apps)
 ```
 
@@ -97,10 +102,22 @@ cd EdittingHub
   (silences) + GPU/CPU (Whisper).
 - Routes : `POST /api/autotrim/scan`, `POST /api/autotrim/start`.
 
+### 7. ScriptCheck (`app/services/scriptcheck.py`)
+- Compare un script de travail (texte de référence) à ce qui est réellement dit
+  dans le rush (ASR via `app.services.asr`).
+- Rapport : couverture %, mots du script / dits, écarts d'ordre (difflib),
+  verdict (OK / Partiel / Divergence importante).
+- Rejette 400 si pas de piste audio ou script vide.
+- Routes : `POST /api/scriptcheck/scan`, `POST /api/scriptcheck/start`.
+- Matériel : CPU (silences/ASR) ou GPU (Whisper ROCm) selon `device`.
+
 ### Infrastructure (v1.5)
 - `app/runtime.py` : budget de threads BLAS (THREAD_BUDGET, env EDITTINGHUB_THREADS),
   priorité `nice` pour les sous-processus (EDITTINGHUB_NICE), sondes CPU/GPU
   AMD via sysfs (probes gpu_busy_percent), mémoire, charge.
+  `system_snapshot(ttl=1.0)` est maintenant mémoïsée 1 seconde : `/api/system`,
+  `/api/jobs` (900 ms) et le ping (10 s) ne relisent plus /proc + /sys en
+  boucle pour rien.
 - `app/cache.py` : cache disque des analyses coûteuses (`outputs/cache/audio`,
   `scenes`) — clé = chemin+taille+mtime+paramètres, invalidation automatique.
 - `GET /api/jobs` : suivi global de tous les jobs (tous onglets), consommé par
@@ -110,9 +127,31 @@ cd EdittingHub
   ne trouve rien, `_check_backend` corrigé (importlib.util explicite).
 - Barre de suivi + chips matériel (`hwchip`, `hwbar`) dans chaque onglet.
 - FCPXML : plan nul ignoré (lève le crash à l'import sous Resolve).
-- Beats : utilisation du chemin hybride grille+attaques fines (le chemin existant
-  était court-circuité), seuils de classement fondés sur le temps (et non sur le
-  nombre d'onsets), pas de déclassement systématique des syncopations.
+- Beats : enveloppe fine d'attaque calculée **une seule fois** par analyse
+  (`_fine_envelope`) et réutilisée par le recalage, le filtre des faux onsets
+  et les marqueurs ; ratio d'attaque vectorisé (`_rolling_median` /
+  `_forward_max`) au lieu d'une boucle Python sur ~240 000 trames ; `plp`
+  retiré (résultat jeté). Analyse ~4 min en ~2,5 s (librosa).
+- Autotrim : rendu en **une seule passe ffmpeg** (`select`/`aselect` +
+  `setpts`) au lieu d'un encodage libx264 par segment + concaténation MPEG-TS.
+  L'ancien `-movflags +faststart` sur du mpegts était invalide. L'audio est
+  rendu depuis la **source** (pas la copie 16 kHz mono) : qualité préservée.
+- `app/services/asr.py` : transcription partagée (autotrim + ScriptCheck).
+  Le worker tourne en sous-processus (torch ROCm + faster-whisper dans le même
+  processus = crash natif). CPU lit le WAV en numpy pour éviter PyAV
+  (version `resolvesubs` incompatible avec `decode_audio(..., metadata_errors=)`).
+  Fichier worker unique par job (pas de collision pid-only). Annulation tue le
+  groupe de processus.
+- `estimates.DEFAULTS`/`OVERHEAD` : ajout des clés `autotrim` et
+  `scriptcheck` (gpu/cpu) avec overhead par fichier.
+- `MODULE_HW` : doublon retiré (la seconde copie mettait `scriptcheck: cpu/gpu`,
+  label matériel invalide). `davinci_install` retourne maintenant le payload
+  complet (`markers`, `path`, `menu_label`, `restart_needed`, `resolve_running`,
+  `fps`, `file_index`, `source`) — l'UI ne plante plus en lisant `info.restart_needed`.
+- `autotrim_scan` : plus d'estimation `convert` détournée ; `estimates.estimate("autotrim", …)`
+  directe, rejet 400 si pas de piste audio.
+- ScriptCheck : worker `.py` unique par job, `device` honoré (GPU/CPU),
+  support annulation, timeout, normalisation accents conservés (`\w` Unicode).
 
 ### Pièges nouveaux
 - `app/static/index.html` : tout `$('id')` doit exister ; la valeur renvoyée par
@@ -124,6 +163,9 @@ cd EdittingHub
 - Backend : FastAPI + uvicorn (threadpool pour les jobs background)
 - Jobs asynchrones : thread + dict en mémoire (`JOBS`)
 - Annulation propre via `threading.Event`
+- Tous les modules lourds (scènes, audio, rythme, autotrim, scriptcheck,
+  conversion, sous-titrage) claiment désormais un créneau `_claim_slot` pour
+  la mise en attente quand `MAX_HEAVY_JOBS` est atteint.
 
 ## Tests rapides
 ```bash
@@ -150,8 +192,8 @@ curl -X POST http://127.0.0.1:8005/api/audio/davinci/install \
 Tests de fumée (à lancer après toute modif backend) :
 
 ```bash
-~/.venvs/edittinghub/bin/python tests/smoke.py        # unitaire, < 1 s (54 tests)
-~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + HTTP (serveur sur 8005, 76 tests)
+~/.venvs/edittinghub/bin/python tests/smoke.py        # unitaire, < 1 s (74 tests)
+~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + HTTP (serveur sur 8005, 121 tests)
 ```
 
 Vérifier un script généré sans Resolve :
@@ -257,3 +299,21 @@ grep -n '^[[:space:]]\+[^#]' <fichier>.py   # doit être vide (aucune ligne inde
 - **UI** : onglet `rhythm`, variables CSS `--rhy/--rhy2`, explorateur natif,
   cases rangs 1/2 (3 décoché), bouton boucle, piste musique optionnelle.
 - **Version** : 1.4.0 (serveur + footer UI).
+
+## Nouveautés (v1.5.0)
+- **Module ScriptCheck** : 7e onglet, comparaison ASR vs script de référence,
+  rapport de couverture %, rejette si pas d'audio ou script vide.
+- **Optimisation autotrim** : rendu en une passe ffmpeg (`select`/`aselect`),
+  audio depuis la source (qualité préservée), ASR honore `device` (GPU/CPU),
+  liste de fillers restreinte (plus de mots-outils), worker ASR partagé
+  (`app/services/asr.py`), fichier worker unique par job.
+- **Optimisation beats** : enveloppe fine partagée, ratio d'attaque vectorisé,
+  `plp` retiré. Analyse ~4 min en ~2,5 s.
+- **Sondes système** : `system_snapshot()` mémoïsée 1 s (moins de lectures
+  /proc /sys), sonde GPU Whisper lancée en arrière-plan au démarrage.
+- **Corrections** : `davinci_install` retourne le payload complet (plus de `null`
+  → TypeError côté UI), doublon `MODULE_HW` retiré, `autotrim_scan` estimation
+  directe, `scenes`/`audio`/`rhythm` claiment un créneau de job, version
+  bumpée à 1.5.0 (serveur + footer UI).
+- **Tests** : +23 tests API (convert/autotrim/scriptcheck scans, davinci_install
+  payload + script compile + zéro ligne indentée), 47 tests API et 121 totaux (`--api`).

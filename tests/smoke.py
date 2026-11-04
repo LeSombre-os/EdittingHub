@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -452,6 +453,8 @@ def test_api() -> None:
     check("export FCPXML rythme", "exportRhythm('fcpxml')" in html)
 
     test_api_rhythm(base)
+    test_api_modules(base)
+    test_api_davinci_install(base)
 
 
 def _post_json(base: str, path: str, payload: dict, timeout: float = 30):
@@ -460,6 +463,194 @@ def _post_json(base: str, path: str, payload: dict, timeout: float = 30):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read()
+
+
+def test_api_modules(base: str) -> None:
+    """Vérifie les contrats des nouveaux modules (convert, autotrim, scriptcheck,
+    davinci_install payload) sur de vrais fichiers."""
+    import tempfile
+    import subprocess
+
+    def post(path, payload, timeout=30):
+        return _post_json(base, path, payload, timeout=timeout)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        video = os.path.join(tmp, "src.mp4")
+        video_noaudio = os.path.join(tmp, "src_noaudio.mp4")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                 "-t", "2", "-pix_fmt", "yuv420p",
+                 "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k", "-shortest",
+                 video],
+                check=True, timeout=60,
+            )
+            # même vidéo sans piste audio (pour vérifier le rejet)
+            subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24",
+                 "-t", "2", "-pix_fmt", "yuv420p",
+                 "-c:v", "libx264", "-an", video_noaudio],
+                check=True, timeout=60,
+            )
+        except Exception as exc:
+            check("modules : médias de test générés", False, str(exc)[:80])
+            return
+
+        # 1. convert scan (sur vidéo sans audio aussi : OK)
+        try:
+            status, body = post("/api/convert/scan",
+                                {"paths": [video_noaudio], "target": "resolve",
+                                 "preset": "sq"})
+            info = json.loads(body)
+            check("convert scan", status == 200)
+            check("convert scan : au moins un fichier",
+                  len(info.get("files") or []) >= 1, str(len(info.get("files") or [])))
+            check("convert scan : besoin estimé", info.get("need", 0) > 0)
+            check("convert scan : estee", "estimate" in info,
+                  list(info.keys()))
+        except Exception as exc:
+            check("convert scan", False, str(exc)[:80])
+
+        # 2. autotrim scan (vidéo AVEC audio)
+        try:
+            status, body = post("/api/autotrim/scan",
+                                {"path": video, "device": "cpu"})
+            info = json.loads(body)
+            check("autotrim scan", status == 200)
+            check("autotrim scan : durée", info.get("duration", 0) > 0)
+            check("autotrim scan : a de l'audio", info.get("has_audio"))
+            check("autotrim scan : estimate", "estimate" in info,
+                  list(info.keys()))
+            # pas de doublon MODULE_HW invalide
+            check("autotrim scan : estimate non None", info["estimate"] is not None)
+        except Exception as exc:
+            check("autotrim scan", False, str(exc)[:80])
+
+        # 2b. autotrim rejette une vidéo sans audio
+        try:
+            post("/api/autotrim/scan", {"path": video_noaudio, "device": "cpu"})
+            check("autotrim scan 400 sans audio", False)
+        except urllib.error.HTTPError as exc:
+            check("autotrim scan 400 sans audio", exc.code == 400,
+                  str(exc.code))
+
+        # 3. scriptcheck scan (vidéo AVEC audio)
+        try:
+            status, body = post("/api/scriptcheck/scan",
+                                {"path": video, "script": "coucou le monde"})
+            info = json.loads(body)
+            check("scriptcheck scan", status == 200)
+            check("scriptcheck scan : compte mots",
+                  info.get("script_word_count") == 3)
+            check("scriptcheck scan : estimate", "estimate" in info,
+                  list(info.keys()))
+            check("scriptcheck scan : estimate non None",
+                  info["estimate"] is not None)
+        except Exception as exc:
+            check("scriptcheck scan", False, str(exc)[:80])
+        try:
+            post("/api/scriptcheck/scan", {"path": "/tmp/absent.xyz",
+                                           "script": "x"})
+            check("scriptcheck scan 404 absent", False)
+        except urllib.error.HTTPError as exc:
+            check("scriptcheck scan 404 absent", exc.code == 404,
+                  str(exc.code))
+
+        try:
+            post("/api/scriptcheck/scan", {"path": video, "script": ""})
+            check("scriptcheck scan 400 script vide", False)
+        except urllib.error.HTTPError as exc:
+            check("scriptcheck scan 400 script vide", exc.code == 400,
+                  str(exc.code))
+
+
+def test_api_davinci_install(base: str) -> None:
+    """Vérifie que /api/audio/davinci/install renvoie bien un payload complet
+    (pas null) et que le script généré compile."""
+    import tempfile
+    import subprocess
+
+    def post(path, payload, timeout=30):
+        return _post_json(base, path, payload, timeout=timeout)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        video = os.path.join(tmp, "src.mp4")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                 "-f", "lavfi", "-i", "testsrc=size=640x360:rate=24",
+                 "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                 "-t", "3", "-pix_fmt", "yuv420p",
+                 "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k", "-shortest",
+                 video],
+                check=True, timeout=60,
+            )
+        except Exception as exc:
+            check("davinci_install : média généré", False, str(exc)[:80])
+            return
+
+        # 1. analyse audio
+        try:
+            _, body = post("/api/audio/analyze",
+                           {"paths": [video]})
+            job = json.loads(body)["id"]
+        except Exception as exc:
+            check("davinci_install : analyse audio", False, str(exc)[:80])
+            return
+
+        state = None
+        for _ in range(60):
+            time.sleep(0.25)
+            try:
+                resp = urllib.request.urlopen(base + f"/api/job/{job}",
+                                              timeout=5)
+                state = json.loads(resp.read())
+                if state.get("status") in ("done", "error"):
+                    break
+            except Exception:
+                pass
+        check("davinci_install : analyse terminée", state["status"] == "done",
+              state.get("error") or state.get("status"))
+
+        if state["status"] != "done":
+            return
+
+        # 2. installation
+        try:
+            status, body = post("/api/audio/davinci/install",
+                                {"job_id": job, "fps": 24, "ranks": [1]})
+            info = json.loads(body)
+            check("davinci_install 200", status == 200)
+            check("davinci_install : markers", isinstance(info.get("markers"), int),
+                  info.get("markers"))
+            check("davinci_install : path", bool(info.get("path")),
+                  info.get("path"))
+            check("davinci_install : menu_label", bool(info.get("menu_label")),
+                  info.get("menu_label"))
+            check("davinci_install : restart_needed (bool)",
+                  isinstance(info.get("restart_needed"), bool))
+            check("davinci_install : resolve_running (bool)",
+                  isinstance(info.get("resolve_running"), bool))
+        except Exception as exc:
+            check("davinci_install", False, str(exc)[:80])
+            return
+
+        # 3. le .py généré compile et n'a pas de ligne indentée
+        try:
+            path = info["path"]
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+            compile(content, path, "exec")
+            indented = [l for l in content.splitlines()
+                        if l.strip() and l[0] in (" ", "\t") and not l.lstrip().startswith("#")]
+            check("davinci_install : .py compile", True)
+            check("davinci_install : pas de ligne indentée", len(indented) == 0,
+                  str(len(indented)))
+        except Exception as exc:
+            check("davinci_install : .py compile", False, str(exc)[:80])
 
 
 def test_api_rhythm(base: str) -> None:
@@ -638,6 +829,57 @@ def test_alignment() -> None:
         check("timecode {:.3f}s -> {}".format(s, tc), tc == expected)
 
 
+def test_autotrim_e2e() -> None:
+    """E2E Coupe blancs : rendu fichier _trimmed, chemin Whisper atteint (fillers).
+
+    Génère un WAV synthétique (3 s de silence + bref bruit, pas de parole
+    reconnaissable) et vérifie que analyze_and_trim termine sans planter,
+    produit un fichier _trimmed, et que le chemin ASR/fillers est bien atteint
+    (enable_fillers=True ne lève pas, filler_words est un entier >= 0).
+    """
+    print("\n[7] Autotrim E2E (chemin Whisper/fillers)")
+    import tempfile
+    import os
+    from pathlib import Path
+
+    try:
+        import numpy as np
+        import soundfile as sf
+        from app.services.autotrim import analyze_and_trim
+    except Exception as exc:
+        check("autotrim : dépendances disponibles", False, str(exc))
+        return
+
+    sr = 16000
+    with tempfile.TemporaryDirectory() as tmp:
+        path = str(Path(tmp) / "rush.wav")
+        y = np.zeros(int(sr * 3), dtype=np.float32)
+        # bref bruit audible mais non-parlé (Whisper renverra [] -> 0 fillers)
+        n = int(sr * 0.2)
+        y[int(sr * 1):int(sr * 1) + n] = 0.3 * np.sin(
+            2 * np.pi * 440 * np.arange(n) / sr
+        )
+        sf.write(path, y, sr)
+
+        # 1. sans fillers
+        res = analyze_and_trim(path, enable_fillers=False, device="cpu")
+        check("autotrim no-fillers: status done", res["status"] == "done",
+              res.get("error"))
+        check("autotrim no-fillers: output existe", os.path.isfile(res["output"]))
+        check("autotrim no-fillers: filler_words == 0",
+              res.get("filler_words") == 0, res.get("filler_words"))
+
+        # 2. avec fillers (chemin Whisper appelé ; pas de parole -> 0 fillers,
+        #    mais aucune exception ne doit remonter)
+        res2 = analyze_and_trim(path, enable_fillers=True, device="cpu")
+        check("autotrim fillers: status done", res2["status"] == "done",
+              res2.get("error"))
+        check("autotrim fillers: output existe", os.path.isfile(res2["output"]))
+        check("autotrim fillers: filler_words entier >= 0",
+              isinstance(res2.get("filler_words"), int) and res2["filler_words"] >= 0,
+              res2.get("filler_words"))
+
+
 def main() -> int:
     print("EdittingHub — tests de fumée")
     test_script()
@@ -647,6 +889,7 @@ def main() -> int:
     test_install()
     test_alignment()
     test_rhythm()
+    test_autotrim_e2e()
     if "--api" in sys.argv:
         test_api()
 

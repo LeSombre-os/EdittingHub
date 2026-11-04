@@ -15,9 +15,15 @@ import time
 import webbrowser
 from pathlib import Path
 
-# Utilise le venv du projet si disponible, sinon python3 système
-_VENV_PY = Path("/home/lesombre/.venvs/edittinghub/bin/python")
-PYTHON = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+# Utilise le venv du projet s'il est détecté, sinon l'interpréteur courant
+_HERE = Path(__file__).resolve().parent
+_CANDIDATES = (
+    _HERE / ".venv" / "bin" / "python",
+    _HERE / ".venvs" / "edittinghub" / "bin" / "python",
+    Path.home() / ".venvs" / "edittinghub" / "bin" / "python",
+)
+_VENV_PY = next((p for p in _CANDIDATES if p.exists()), None)
+PYTHON = str(_VENV_PY) if _VENV_PY else sys.executable
 
 HOST = "127.0.0.1"
 PORT = 8005

@@ -1,7 +1,7 @@
 # EdittingHub
 
 Studio de montage **100 % local** (aucun cloud, aucune télémétrie, aucune IA
-distante) qui réunit **six** outils autour d'une même interface web :
+distante) qui réunit **sept** outils autour d'une même interface web :
 
 | Module | Ce qu'il fait | Techno |
 |---|---|---|
@@ -10,10 +10,13 @@ distante) qui réunit **six** outils autour d'une même interface web :
 | **Plans** | Découpe une vidéo en plans et exporte EDL / FCPXML / CSV | PySceneDetect + OpenCV |
 | **Audio** | Détecte les *beats*, les classe en 3 rangs d'énergie et les pose en **marqueurs dans DaVinci Resolve** | Librosa |
 | **Rythme** | Monte la vidéo **au rythme de la musique** : découpe séquentielle sur les beats, plans min/max, bouclage, exports FCPXML/EDL/CSV | Librosa + logique locale |
-| **Coupe blancs** | Supprime les passages silencieux et les hésitations (« euh… ») d'un rush audio/vidéo et produit un fichier prêt à publier | ffmpeg + librosa + faster-whisper |
+| **Coupe blancs** | Supprime les passages silencieux et les hésitations (« euh… ») d'un rush audio/vidéo et produit un fichier prêt à publier | ffmpeg + librosa + Whisper (CPU/GPU) |
+| **ScriptCheck** | Compare le script de travail à ce qui est réellement dit (ASR) : couverture %, mots manquants, écarts d'ordre | ffmpeg + Whisper + difflib |
 
 Interface : un seul fichier HTML (CSS + Vanilla JS, zéro CDN, zéro framework).
 Backend : FastAPI + uvicorn, jobs asynchrones annulables.
+
+Version : **1.5**.
 
 ---
 
@@ -65,12 +68,14 @@ export EDITTINGHUB_WORKSPACE=/chemin/du/workspace
 ### Tests
 
 ```bash
-~/.venvs/edittinghub/bin/python tests/smoke.py        # 36 tests, < 1 s
-~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + tests HTTP (serveur lancé)
+~/.venvs/edittinghub/bin/python tests/smoke.py        # 74 tests unitaires, < 1 s
+~/.venvs/edittinghub/bin/python tests/smoke.py --api  # + tests HTTP (serveur lancé, 121 tests)
 ```
 
 Couvre le script DaVinci (compilation, frames entiers, collage console), le
-FCPXML, les quatre exports et l'installation dans Resolve.
+FCPXML, les quatre exports, l'installation dans Resolve, et les contrats des
+modules Conversion / Coupe blancs / ScriptCheck (dont `davinci_install`
+retourne un payload complet, pas `null`).
 
 ### Lancement
 
@@ -143,6 +148,20 @@ Découpe la vidéo **séquentiellement** pour coller aux temps forts de la musiq
   - **EDL CMX 3600** : 4 timecodes par événement (source + record).
   - **CSV** : tableau lisible (plan, beat, source in/out, durée, timeline).
 - **Import Resolve** : *Fichier → Importer → Timeline…* → choisir le `.fcpxml`. La musique arrive déjà alignée sur la piste liée.
+
+### 6. Coupe blancs
+
+Supprime les passages silencieux et les hésitations (« euh… ») d'un rush
+audio/vidéo et produit un fichier `_trimmed` à côté de la source.
+
+### 7. ScriptCheck
+
+Compare un script de travail (texte de référence) à ce qui est réellement dit
+dans le rush (ASR). Rapport : couverture (%), mots manquants, mots en plus et
+écarts d'ordre — utile pour relire des rushes parlés contre un texte prévu.
+
+Tout est local : ffmpeg pour l'extraction audio, Whisper (faster-whisper CPU ou
+openai-whisper ROCm GPU) pour la transcription, difflib pour l'alignement.
 
 ---
 
@@ -250,6 +269,8 @@ Toutes les routes sont locales (`127.0.0.1:8005`).
 | `POST` | `/api/rhythm/export` | Export FCPXML / EDL / CSV du montage |
 | `POST` | `/api/autotrim/scan` | Vérifie un fichier et estime la durée |
 | `POST` | `/api/autotrim/start` | Coupe blancs + hésitations (job, fichier `_trimmed`) |
+| `POST` | `/api/scriptcheck/scan` | Vérifie un fichier + script et estime la durée |
+| `POST` | `/api/scriptcheck/start` | Compare ASR à un script de référence (job, rapport de couverture) |
 | `GET` | `/api/jobs` | Suivi global de *tous* les jobs (tous onglets) : progression, ETA, matériel |
 | `GET` | `/api/cache` | État du cache d'analyses (beats, plans) |
 | `POST` | `/api/cache/clear` | Vide le cache (tout ou par type) |
@@ -313,7 +334,9 @@ EdittingHub/
 │   ├── errors.py              # Exceptions métier
 │   ├── utils.py               # Timecode, tailles, collecte de fichiers
 │   ├── services/
+│   │   ├── asr.py             # Transcription Whisper partagée (autotrim + ScriptCheck)
 │   │   ├── convert.py         # → ResolveConvert/convert.py
+│   │   ├── scriptcheck.py     # → ScriptCheck (ASR vs script de référence)
 │   │   ├── subtitles.py       # → ResolveSubs/transcrire.py
 │   │   ├── scene_detect.py    # → PySceneDetect
 │   │   ├── audio_beats.py     # → Librosa (analyse beats)

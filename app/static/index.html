@@ -194,10 +194,10 @@ input[type=number]{max-width:110px}
 .taskdock-head{display:flex;align-items:center;justify-content:space-between;
   gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);
   text-transform:uppercase;letter-spacing:.8px;font-weight:700}
-.taskdock-head .sysline{display:flex;gap:10px;flex-wrap:wrap;font-weight:600;
+.sysline{display:flex;gap:10px;flex-wrap:wrap;font-weight:600;
   letter-spacing:0;text-transform:none;font-size:11.5px}
-.taskdock-head .sysline b{color:var(--txt);font-variant-numeric:tabular-nums}
-.taskdock-head .sysline .warn{color:var(--warn)} .taskdock-head .sysline .ok{color:var(--ok)}
+.sysline b{color:var(--txt);font-variant-numeric:tabular-nums}
+.sysline .warn{color:var(--warn)} .sysline .ok{color:var(--ok)}
 .task{display:block;padding:9px 0 2px;border-top:1px solid var(--line)}
 .task:first-of-type{border-top:0}
 .task-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px}
@@ -216,6 +216,8 @@ input[type=number]{max-width:110px}
 .task-bar.waiting i{width:35%!important;animation:slide 1.3s ease-in-out infinite}
 .task-label{font-size:11.5px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
+.task-log{font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;margin-top:2px}
 .hwchip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;
   font-size:10.5px;font-weight:700;letter-spacing:.4px;border:1px solid transparent;
   white-space:nowrap}
@@ -312,6 +314,7 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
     <span class="status-dot" id="statusDot"></span>
     <span id="statusText">Connexion…</span>
   </div>
+  <span class="sysline" id="sysLine"></span>
 </header>
 
 <!-- ── Onglets ───────────────────────────────────────────── -->
@@ -336,7 +339,6 @@ footer{text-align:center;color:var(--dim);font-size:11.5px;margin-top:34px;
 <div class="taskdock hidden" id="taskDock" aria-live="polite" aria-label="Travaux en cours">
   <div class="taskdock-head">
     <span id="dockTitle">⚙️ Travail en cours</span>
-    <span class="sysline" id="sysLine"></span>
   </div>
   <div id="taskList"></div>
 </div>
@@ -932,7 +934,7 @@ OK - marqueurs ajoutes sur la timeline active.</pre>
   </div>
 </section>
 
-  <span>EdittingHub v1.4 · 100 % local · Zorin OS</span>
+  <span>EdittingHub v1.5 · 100 % local · Zorin OS</span>
   <span class="tool-status" id="toolStatus"></span>
   <span class="system-status" id="systemStatus"></span>
 </footer>
@@ -994,6 +996,7 @@ const S = {
   browserCtx: null,
   browserPath: '',
   serverOk: false,
+  _configLoaded: false,
 };
 
 /* ── Helpers génériques ─────────────────────────────────────────────────── */
@@ -1116,18 +1119,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   checkServer();
   setInterval(checkServer, 10000);
-  // Moniteur système vif (toutes les 3 s) pour évaluer la charge et choisir
-  // quelles tâches parallèles lancer sans surcharger la machine
-  setInterval(async () => {
-    if (!S.serverOk) return;
-    try {
-      const r = await fetch('/api/system', { cache: 'no-store' });
-      if (!r.ok) return;
-      const sys = await r.json();
-      renderSystemStatus(sys);
-    } catch (e) { /* ignore */ }
-  }, 3000);
-
   // Navigation clavier sur les onglets (flèches gauche/droite)
   const tabs = Array.from(document.querySelectorAll('.tab'));
   tabs.forEach((btn, i) => {
@@ -1146,6 +1137,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Suivi global : ce qui tourne **quel que soit l'onglet** ouvert
   setInterval(pollDock, 900);
   setTimeout(pollDock, 300);
+
+  // Réactive le bouton « Couper » / « Vérifier » quand l'utilisateur remplit
+  // le champ texte à la main (sans passer par « Ajouter » ou le navigateur).
+  $('trimPath')?.addEventListener('input', () => updateModuleAvailability());
+  $('scPath')?.addEventListener('input', () => updateModuleAvailability());
 });
 
 async function loadConfig(){
@@ -1230,25 +1226,18 @@ async function checkServer(){
     $('statusDot').classList.remove('off');
     $('statusText').textContent = 'Serveur local actif';
     S.serverOk = true;
-
-    // Fetch config and system data
-    const configResp = await fetch('/api/config', { cache: 'no-store' });
-    if (configResp.ok) {
-      const config = await configResp.json();
-      renderToolStatus(config.tools || {});
-    }
-    const systemResp = await fetch('/api/system', { cache: 'no-store' });
-    if (systemResp.ok) {
-      const system = await systemResp.json();
-      renderSystemStatus(system);
+    // Rafraîchit la config/outils uniquement à la reconnexion (loadConfig gère
+    // le chargement initial au démarrage). Évite 3 fetch redondants toutes les 10 s.
+    if (!S._configLoaded){
+      await loadConfig();
+      S._configLoaded = true;
     }
   } catch (e) {
     $('statusDot').classList.add('off');
     $('statusText').textContent = 'Serveur hors ligne';
     S.serverOk = false;
-    // Clear statuses when server is down
+    S._configLoaded = false;
     $('toolStatus').innerHTML = '<span class="n">Serveur hors ligne</span>';
-    $('systemStatus').innerHTML = '';
   }
 }
 
@@ -1276,13 +1265,13 @@ function pushPath(ctx, path){
   if (!path) return;
   if (!S[ctx].paths) S[ctx].paths = [];
   if (!S[ctx].paths.includes(path)) S[ctx].paths.push(path);
-  // Modules "single-file" : on remplit aussi le champ texte si c'est l'unique
-  if ((ctx === 'trim' || ctx === 'sc') && !S[ctx].paths.length + 1){
-    // noop
-  }
   if (ctx === 'trim'){ const i=$('trimPath'); if(i && !i.value.trim()) i.value = path; }
   if (ctx === 'sc'){ const i=$('scPath'); if(i && !i.value.trim()) i.value = path; }
   invalidateScan(ctx);
+  // Réactive le bouton « Couper » / « Vérifier » après un import (navigateur
+  // natif ou explorateur intégré) : sans ça le bouton restait grisé car
+  // renderChips('trim'|'sc') sort tôt (pas de conteneur #trimChips/#scChips).
+  updateModuleAvailability();
 }
 function addPath(ctx){
   const input = $(ctx + 'Path');
@@ -1302,6 +1291,10 @@ function delPath(ctx, i){
   renderChips(ctx);
 }
 function renderChips(ctx){
+  // Met à jour les boutons de lancement même quand il n'y a pas de conteneur
+  // de chips (cas des modules single-file trim / sc : pas de #trimChips).
+  updateModuleAvailability();
+
   const el = $(ctx + 'Chips');
   if (!el) return;
   el.innerHTML = S[ctx].paths.map((p, i) => `
@@ -1310,7 +1303,6 @@ function renderChips(ctx){
       <button class="btn btn-ghost btn-sm" type="button"
               onclick="delPath('${ctx}',${i})" aria-label="Retirer">✕</button>
     </span>`).join('');
-  updateModuleAvailability();
 }
 function updateModuleAvailability(){
   if (!S.config) return;
@@ -1602,7 +1594,7 @@ async function startTrim(){
     enable_fillers: !!$('trimFillers').checked,
     device: 'auto',
   };
-  beginJob('trim', '/api/autotrim/start', cfg, { seconds: 60, human: '1 min' });
+  beginJob('trim', '/api/autotrim/start', cfg, null);
 }
 function startScriptCheck(){
   const path = ($('scPath') && $('scPath').value || '').trim();
@@ -1610,7 +1602,7 @@ function startScriptCheck(){
   if (!path){ toast('Choisissez un fichier', 'err'); return; }
   if (!script){ toast('Fournissez le script de référence', 'err'); return; }
   const cfg = { path: path, script: script, device: 'auto' };
-  beginJob('sc', '/api/scriptcheck/start', cfg, { seconds: 30, human: '30 s' });
+  beginJob('sc', '/api/scriptcheck/start', cfg, null);
 }
 function startSceneDetect(){
   if (!S.scene.paths.length){
@@ -1724,8 +1716,16 @@ function updateJobProgress(key, job){
   const p = Math.max(0, Math.min(1, Number(job.progress) || 0));
   if (bar){
     bar.style.display = 'block';
-    bar.classList.remove('indeterminate');
-    bar.querySelector('i').style.width = Math.round(p * 100) + '%';
+    // Mode indéterminé (animation) quand le job tourne mais qu'aucun %
+    // n'est encore connu (ex: whisper ne remonte rien pendant l'inférence).
+    const indeterminate = job.status === 'running' && p <= 0 && !job.total;
+    if (indeterminate){
+      bar.classList.add('indeterminate');
+      bar.querySelector('i').style.width = '0%';
+    } else {
+      bar.classList.remove('indeterminate');
+      bar.querySelector('i').style.width = Math.round(p * 100) + '%';
+    }
   }
   const logsEl = $(LOGS[key]);
   if (logsEl && job.logs && job.logs.length){
@@ -2241,6 +2241,9 @@ async function pollDock(){
         ${bar}
         <div class="task-label">${escapeHtml(job.label || 'Travail en cours…')}</div>
         ${job.cached ? '<div class="task-label">⚡ résultat en cache</div>' : ''}
+        ${job.logs && job.logs.length
+          ? `<div class="task-log">${escapeHtml(job.logs[job.logs.length - 1] || '')}</div>`
+          : ''}
       </div>`;
   }).join('');
 }

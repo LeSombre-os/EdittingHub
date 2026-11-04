@@ -81,21 +81,52 @@ def _analysis_hop(sr):
     return 1 << max(4, int(round(math.log2(target))))
 
 
-def _novelty_envelope(y, sr, hop_ms=1.0, smooth_ms=1.5):
-    """Enveloppe de nouveauté à ~1 ms, pour recaler un onset sur l'attaque.
+def _fine_envelope(y, sr):
+    """Enveloppe d'attaque à ~1 ms, pour recaler un onset sur l'attaque.
 
     Différence première (accentue les attaques, atténue les graves) puis
-    lissage énergétique ; le maximum par bloc de `hop_ms` conserve la crête.
+    lissage énergétique ; le maximum par bloc de 1 ms conserve la crête.
+    Calculée **une seule fois** par analyse : elle servait auparavant trois
+    fois (recalage, filtre des faux onsets, marqueurs), soit 3 passes sur
+    l'échantillonnage complet.
     """
     import numpy as np
     from scipy.ndimage import uniform_filter1d
 
     diff = np.abs(np.diff(y, prepend=y[:1]))
-    width = max(1, int(round(sr * smooth_ms / 1000.0)))
+    width = max(1, int(round(sr * 0.0015)))
     smooth = uniform_filter1d(diff, size=width, mode="nearest")
-    hop = max(1, int(round(sr * hop_ms / 1000.0)))
+    hop = max(1, int(round(sr * 0.001)))
     frames = max(1, len(smooth) // hop)
     return smooth[:frames * hop].reshape(frames, hop).max(axis=1), hop
+
+
+def _rolling_median(x, window):
+    """Médiane glissante sur les `window` échantillons **précédents**.
+
+    Équivalent vectorisé de ``median(x[max(0,i-window+1):i+1])`` : boucler en
+    Python sur ~240 000 trames coûtait plusieurs secondes par morceau.
+    """
+    import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    pad = window - 1
+    padded = np.pad(x, (pad, 0), mode="edge")
+    out = np.median(sliding_window_view(padded, window), axis=1)
+    # Les premières trames n'ont pas d'historique complet : on reproduit
+    # exactement la médiane du préfixe disponible (sinon divergence à ~8 ms).
+    for i in range(min(pad, out.size)):
+        out[i] = np.median(x[: i + 1])
+    return out
+
+
+def _forward_max(x, window):
+    """Maximum sur les `window` échantillons **suivants** (vectorisé)."""
+    import numpy as np
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    padded = np.pad(x, (0, window - 1), mode="edge")
+    return sliding_window_view(padded, window).max(axis=1)
 
 
 def _snap_to_attack(times, novelty, hop, sr):
@@ -131,7 +162,8 @@ def _snap_to_attack(times, novelty, hop, sr):
     return out
 
 
-def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_times, hop):
+def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_times,
+                        hop, fine=None):
     """Construit la liste finale des marqueurs de beats en combinant :
     1. La grille de beats (PLP) -> temps principaux
     2. L'enveloppe fine (1ms) -> détection d'attaques précises
@@ -140,23 +172,16 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
     Retourne: (times, strengths, period, grid)
     """
     import numpy as np
-    from scipy.ndimage import uniform_filter1d
     from scipy.signal import find_peaks
 
-    # 1. Enveloppe fine à ~1 ms pour localisation précise des attaques
-    diff = np.abs(np.diff(y, prepend=y[:1]))
-    smooth = uniform_filter1d(diff, size=max(1, int(sr * 0.0015)), mode="nearest")
-    hop_fine = max(1, int(round(sr * 0.001)))
-    frames = max(1, len(smooth) // hop_fine)
-    fe = smooth[:frames * hop_fine].reshape(frames, hop_fine).max(axis=1)
+    # 1. Enveloppe fine à ~1 ms (partagée avec _compute_onsets)
+    fe, hop_fine = fine if fine is not None else _fine_envelope(y, sr)
     fps = float(sr) / float(hop_fine)
 
-    # Ratio d'attaque pour chaque frame fine
-    ratios = np.ones_like(fe)
-    for i in range(1, len(fe)):
-        base = np.median(fe[max(0, i - 8):i + 1])
-        rise = np.max(fe[i:min(i + 6, len(fe))])
-        ratios[i] = rise / (base + 1e-9)
+    # Ratio d'attaque pour chaque trame fine (vectorisé)
+    base = _rolling_median(fe, 9)
+    rise = _forward_max(fe, 6)
+    ratios = rise / (base + 1e-9)
 
     # 2. Grille de beats (PLP) - temps principaux
     grid = np.sort(np.asarray(beat_times, dtype=float)) if beat_times is not None else np.array([])
@@ -242,10 +267,6 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
     # éviter les doublons trop proches des beats principaux
     def _too_close(t, srcs, tol=0.05):
         return any(abs(t - b[0]) < tol for b in srcs)
-    for fb in filled:
-        if _too_close(fb[0], main_beats, 0.05) or _too_close(fb[0], off_grid_beats, 0.05):
-            continue
-        # L'agrégation finale (à la ligne suivante) applique déjà ce filtre.
 
     # 5. Combiner et trier
     all_beats = main_beats + off_grid_beats + [b for b in filled if not _too_close(b[0], main_beats + off_grid_beats, 0.05)]
@@ -260,44 +281,31 @@ def _build_beat_markers(y, sr, onset_env, onset_times, onset_strengths, beat_tim
 
 # Alias pour compatibilité - on utilisera la nouvelle approche directement dans analyze_audio
 def _filter_weak_onsets(y, sr, times, strengths, min_ratio=1.5, min_strength=None,
-                         beat_times=None, hop=None):
-    """Filtre les onsets sans vraie attaque - version legacy, redirige vers la nouvelle méthode."""
-    # Pour compatibilité, on appelle la nouvelle méthode mais elle a besoin d'onset_env
-    # Donc on garde l'ancien comportement simple pour l'instant
+                        beat_times=None, hop=None, fine=None):
+    """Filtre les onsets sans vraie attaque (souffle, voix, tenues).
+
+    Vectorisé : l'ancienne version recalculait une médiane glissante par onset
+    après avoir reconstruit l'enveloppe fine.
+    """
     import numpy as np
-    from scipy.ndimage import uniform_filter1d
 
     times = np.asarray(times, dtype=float)
     strengths = np.asarray(strengths, dtype=float)
     if times.size == 0:
         return times, strengths
 
-    diff = np.abs(np.diff(y, prepend=y[:1]))
-    smooth = uniform_filter1d(diff, size=max(1, int(sr * 0.0015)), mode="nearest")
-    hop_fine = max(1, int(round(sr * 0.001)))
-    frames = max(1, len(smooth) // hop_fine)
-    fe = smooth[:frames * hop_fine].reshape(frames, hop_fine).max(axis=1)
+    fe, hop_fine = fine if fine is not None else _fine_envelope(y, sr)
     fps = float(sr) / float(hop_fine)
 
     if min_strength is None:
         min_strength = float(np.median(strengths)) * 0.5
 
-    keep = []
-    for i, t in enumerate(times):
-        if strengths[i] < min_strength:
-            continue
-        j = int(t * fps)
-        if j >= len(fe):
-            continue
-        base = np.median(fe[max(0, j - 8):j + 1])
-        rise = np.max(fe[j:min(j + 6, len(fe))])
-        ratio = rise / (base + 1e-9)
-        if ratio >= min_ratio:
-            keep.append(i)
+    base = _rolling_median(fe, 9)
+    rise = _forward_max(fe, 6)
+    ratio = rise / (base + 1e-9)
 
-    keep = np.asarray(keep, dtype=int)
-    if keep.size == 0:
-        return np.array([], dtype=float), np.array([], dtype=float)
+    idx = np.clip((times * fps).astype(int), 0, max(0, ratio.size - 1))
+    keep = (strengths >= min_strength) & (ratio[idx] >= min_ratio)
     return times[keep], strengths[keep]
 
 
@@ -399,7 +407,7 @@ def _load_audio(audio_path, sr=DEFAULT_AUDIO_SR, cancel_event=None):
     return y, sr_actual
 
 
-def _compute_onsets(y, sr):
+def _compute_onsets(y, sr, fine=None):
     """Calcule l'enveloppe d'onset et détecte les onsets.
 
     Trois corrections cumulatives par rapport à l'ancienne version :
@@ -455,7 +463,8 @@ def _compute_onsets(y, sr):
     coarse = librosa.frames_to_time(frames, hop_length=hop, sr=sr)
 
     # 3. Recalage sur le début de l'attaque (1 ms).
-    novelty, novelty_hop = _novelty_envelope(y, sr)
+    fine = fine if fine is not None else _fine_envelope(y, sr)
+    novelty, novelty_hop = fine
     times = _snap_to_attack(coarse, novelty, novelty_hop, sr)
 
     # 4. Déduplication défensive : le recalage peut rapprocher deux marqueurs
@@ -469,7 +478,8 @@ def _compute_onsets(y, sr):
         try:
             t_arr, s_arr = _filter_weak_onsets(
                 y, sr, times.tolist(), strengths.tolist(),
-                min_ratio=1.6, min_strength=float(np.median(strengths)) * 0.5)
+                min_ratio=1.6, min_strength=float(np.median(strengths)) * 0.5,
+                fine=fine)
             if t_arr.size >= max(1, times.size // 4):
                 times, strengths = t_arr, s_arr
         except Exception:  # noqa: BLE001 — le filtre reste facultatif
@@ -479,12 +489,12 @@ def _compute_onsets(y, sr):
 
 
 def _estimate_tempo_sr(onset_env, sr, hop):
-    """Estime le tempo, la grille de beats et l'activation PLP.
+    """Estime le tempo et la grille de beats.
 
     `hop` doit accompagner l'enveloppe : sans lui, beat_track interprete
     les trames avec son hop par défaut (512) et renvoie des temps faux.
 
-    Retourne (tempo: float, beat_times: np.ndarray, plp: np.ndarray).
+    Retourne (tempo: float, beat_times: np.ndarray).
     """
     import numpy as np
     import librosa
@@ -508,13 +518,7 @@ def _estimate_tempo_sr(onset_env, sr, hop):
     except Exception:
         tempo = 120.0
 
-    try:
-        plp = librosa.beat.plp(onset_envelope=onset_env, sr=sr, hop_length=hop)
-    except TypeError:
-        # Signature différente selon les versions
-        plp = onset_env
-
-    return float(tempo), np.asarray(beat_times, dtype=float), plp
+    return float(tempo), np.asarray(beat_times, dtype=float)
 
 
 def _local_percentile(arr, window_size, percentile):
@@ -568,6 +572,8 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
 
     # Seuil absolu minimum pour être considéré comme un potentiel beat
     min_strength_for_beat = max(0.1, float(np.median(strengths)) * 0.3)
+    # Hoisté hors de la boucle : était recalculé pour chaque onset.
+    energy_range = float(np.percentile(strengths, 75)) - min_strength_for_beat
 
     # Point d'entrée musical : premier beat de la grille avec un onset fort à proximité
     music_start = 0.0
@@ -596,7 +602,6 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
         # Composante 1: énergie normalisée (0-1)
         # Utiliser un pourcentage plus bas pour être plus inclusif
         # Et ajouter un petit offset pour éviter la division par zéro
-        energy_range = np.percentile(strengths, 75) - min_strength_for_beat
         if energy_range < 1e-9:
             energy_norm = 0.5  # Valeur par défaut si peu de variation
         else:
@@ -666,9 +671,10 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
         else:
             rank = 3
 
-        # 4. Détection position sur la grille
+        # 4. Détection position sur la grille (index et distance en une passe)
         on_grid = False
         nearest_beat_dist = float('inf')
+        idx_near = -1
         if grid.size:
             idx_grid = int(np.searchsorted(grid, float(t)))
             for cand_idx in (idx_grid - 1, idx_grid):
@@ -676,9 +682,8 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
                     dist = abs(float(t) - float(grid[cand_idx]))
                     if dist < nearest_beat_dist:
                         nearest_beat_dist = dist
-                    if dist <= grid_tol:
-                        on_grid = True
-                        break
+                        idx_near = cand_idx
+            on_grid = nearest_beat_dist <= grid_tol
 
         # 5. Ajustement de rang selon position rythmique. On ne déclasse que si
         # l'énergie est INSUFFISANTE pour le rang attribué — sinon on conserve
@@ -694,16 +699,7 @@ def _classify_beats(onset_times, onset_strengths, tempo, sr, beat_times=None, ho
                 rank = 3
 
         # Downbeat : phase 0 du mètre (uniquement indicative, n'affecte pas le rang)
-        is_downbeat = False
-        if grid.size > 0 and period > 0:
-            idx_grid = int(np.searchsorted(grid, float(t)))
-            ii = max(0, min(grid.size - 1, idx_grid - (1 if (idx_grid > 0 and grid[idx_grid - 1] > t or idx_grid >= grid.size) else 0)))
-            nearest = grid[ii] if grid.size else None
-            if nearest is not None:
-                # index dans la grille du beat le plus proche
-                idx_near = int(np.argmin(np.abs(grid - float(t)))) if grid.size else -1
-                if idx_near >= 0 and period > 0:
-                    is_downbeat = (idx_near % meter) == 0
+        is_downbeat = bool(idx_near >= 0 and period > 0 and (idx_near % meter) == 0)
         beats.append({
             "time": round(float(t), 3),
             "energy": round(float(s), 4),
@@ -753,20 +749,25 @@ def analyze_audio(audio_path, sr=DEFAULT_AUDIO_SR, progress_cb=None,
     duration = librosa_seconds(y, sr_actual)
     step(0.25, f"Audio chargé ({duration:.1f} s, {sr_actual} Hz)")
 
+    # Enveloppe fine d'attaque (1 ms) : calculée une fois, réutilisée par le
+    # recalage, le filtre des faux onsets et les marqueurs.
+    fine = _fine_envelope(y, sr_actual)
+
     # Enveloppe d'onset + détection (raglé pour l'alignement)
     step(0.3, "Détection des onsets")
-    onset_env, onset_times, onset_strengths = _compute_onsets(y, sr_actual)
+    onset_env, onset_times, onset_strengths = _compute_onsets(y, sr_actual,
+                                                              fine=fine)
 
     # Tempo estimé (la grille est ancrée sur la musique, plus sur 0)
     step(0.6, "Estimation du tempo")
     audio_offset = _audio_offset(audio_path)
-    tempo, beat_times, _plp = _estimate_tempo_sr(onset_env, sr_actual, hop)
+    tempo, beat_times = _estimate_tempo_sr(onset_env, sr_actual, hop)
 
     # Nouvelle approche hybride : grille PLP + enveloppe fine + onsets librosa
     step(0.65, "Construction marqueurs (grille + attaques fines)")
-    from app.services.audio_beats import _build_beat_markers
     beat_times_final, strengths_final, period, grid = _build_beat_markers(
-        y, sr_actual, onset_env, onset_times, onset_strengths, beat_times, hop
+        y, sr_actual, onset_env, onset_times, onset_strengths, beat_times, hop,
+        fine=fine,
     )
     if beat_times_final is None or len(beat_times_final) == 0:
         beat_times_final = onset_times.copy()
